@@ -7,6 +7,7 @@ defmodule SymphonyElixir.StatusDashboard do
   require Logger
 
   alias SymphonyElixir.{Config, HttpServer}
+  alias SymphonyElixir.Codex.Account, as: CodexAccount
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -316,6 +317,7 @@ defmodule SymphonyElixir.StatusDashboard do
              running: running,
              retrying: retrying,
              codex_totals: codex_totals,
+             account: Map.get(snapshot, :account),
              rate_limits: Map.get(snapshot, :rate_limits),
              polling: Map.get(snapshot, :polling)
            }},
@@ -333,6 +335,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_snapshot_content(snapshot_data, tps, terminal_columns_override \\ nil) do
     case snapshot_data do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
+        account = Map.get(snapshot, :account)
         rate_limits = Map.get(snapshot, :rate_limits)
         project_link_lines = format_project_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
@@ -362,6 +365,7 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow) <>
              colorize(" | ", @ansi_gray) <>
              colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
+           colorize("│ Codex Account: ", @ansi_bold) <> format_account_summary(account),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
            project_link_lines,
            project_refresh_line,
@@ -561,6 +565,7 @@ defmodule SymphonyElixir.StatusDashboard do
              running: running,
              retrying: retrying,
              codex_totals: codex_totals,
+             account: CodexAccount.summary(),
              rate_limits: Map.get(snapshot, :rate_limits),
              polling: Map.get(snapshot, :polling)
            }}
@@ -945,6 +950,83 @@ defmodule SymphonyElixir.StatusDashboard do
     |> inspect(limit: 10)
     |> truncate(80)
     |> colorize(@ansi_gray)
+  end
+
+  defp format_account_summary(nil), do: colorize("unavailable", @ansi_gray)
+
+  defp format_account_summary(%{status: "signed_out"}),
+    do: colorize("not signed in", @ansi_orange)
+
+  defp format_account_summary(%{status: "not_required"}),
+    do: colorize("not required", @ansi_gray)
+
+  defp format_account_summary(account) when is_map(account) do
+    primary =
+      account_primary_label(account)
+      |> then(fn
+        nil -> colorize("connected", @ansi_yellow)
+        value -> colorize(value, @ansi_yellow)
+      end)
+
+    auth_label = account_auth_label(account)
+    plan_label = account_plan_label(account)
+
+    [
+      primary,
+      auth_label && colorize(" | ", @ansi_gray) <> colorize(auth_label, @ansi_cyan),
+      plan_label && colorize(" | ", @ansi_gray) <> colorize(plan_label, @ansi_green)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> IO.iodata_to_binary()
+  end
+
+  defp format_account_summary(other) do
+    other
+    |> inspect(limit: 10)
+    |> truncate(80)
+    |> colorize(@ansi_gray)
+  end
+
+  defp account_primary_label(account) when is_map(account) do
+    case map_value(account, ["email", :email]) do
+      email when is_binary(email) and email != "" ->
+        email
+
+      _ ->
+        case map_value(account, ["type", :type]) do
+          "apiKey" -> "API key"
+          "chatgpt" -> "ChatGPT"
+          value when is_binary(value) and value != "" -> titleize_words(value)
+          _ -> nil
+        end
+    end
+  end
+
+  defp account_auth_label(account) when is_map(account) do
+    type = map_value(account, ["type", :type])
+    email = map_value(account, ["email", :email])
+
+    if is_binary(email) and email != "" and is_binary(type) and type != "" do
+      case type do
+        "apiKey" -> nil
+        "chatgpt" -> "ChatGPT"
+        other -> titleize_words(other)
+      end
+    end
+  end
+
+  defp account_plan_label(account) when is_map(account) do
+    case map_value(account, ["plan_type", :plan_type, "planType", :planType]) do
+      plan when is_binary(plan) and plan != "" -> titleize_words(plan)
+      _ -> nil
+    end
+  end
+
+  defp titleize_words(value) when is_binary(value) do
+    value
+    |> String.replace(~r/[_-]+/, " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 
   defp format_rate_limit_bucket(nil), do: "n/a"

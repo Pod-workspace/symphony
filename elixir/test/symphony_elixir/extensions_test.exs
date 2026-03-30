@@ -101,6 +101,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     :ok
   end
 
+  setup do
+    Application.put_env(:symphony_elixir, :codex_account_summary_override, account_summary())
+    :ok
+  end
+
   test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do
     ensure_workflow_store_running()
     assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
@@ -372,7 +377,15 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "account" => %{
+               "status" => "ready",
+               "type" => "chatgpt",
+               "auth_mode" => "chatgpt",
+               "email" => "agent@example.com",
+               "plan_type" => "pro",
+               "requires_openai_auth" => true
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -539,6 +552,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Offline"
     assert html =~ "Copy ID"
     assert html =~ "Codex update"
+    assert html =~ "Codex account"
+    assert html =~ "agent@example.com"
+    assert html =~ "ChatGPT"
+    assert html =~ "Pro"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -704,6 +721,17 @@ defmodule SymphonyElixir.ExtensionsTest do
       ],
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
+    }
+  end
+
+  defp account_summary do
+    %{
+      status: "ready",
+      type: "chatgpt",
+      auth_mode: "chatgpt",
+      email: "agent@example.com",
+      plan_type: "pro",
+      requires_openai_auth: true
     }
   end
 

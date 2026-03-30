@@ -261,6 +261,12 @@ pre,
   letter-spacing: -0.03em;
 }
 
+.metric-value-account {
+  font-size: clamp(1.15rem, 1.6vw, 1.5rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .metric-detail {
   margin: 0.45rem 0 0;
   color: var(--muted);

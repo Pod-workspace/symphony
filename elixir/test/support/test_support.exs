@@ -8,6 +8,7 @@ defmodule SymphonyElixir.TestSupport do
 
       alias SymphonyElixir.AgentRunner
       alias SymphonyElixir.CLI
+      alias SymphonyElixir.Codex.Account, as: CodexAccount
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
@@ -31,18 +32,36 @@ defmodule SymphonyElixir.TestSupport do
             "symphony-elixir-workflow-#{System.unique_integer([:positive])}"
           )
 
+        previous_account_override =
+          case Application.fetch_env(:symphony_elixir, :codex_account_summary_override) do
+            {:ok, value} -> {:ok, value}
+            :error -> :error
+          end
+
         File.mkdir_p!(workflow_root)
         workflow_file = Path.join(workflow_root, "WORKFLOW.md")
         write_workflow_file!(workflow_file)
         Workflow.set_workflow_file_path(workflow_file)
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
+        CodexAccount.clear_cache_for_test()
+        Application.put_env(:symphony_elixir, :codex_account_summary_override, nil)
 
         on_exit(fn ->
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+          CodexAccount.clear_cache_for_test()
+
+          case previous_account_override do
+            {:ok, value} ->
+              Application.put_env(:symphony_elixir, :codex_account_summary_override, value)
+
+            :error ->
+              Application.delete_env(:symphony_elixir, :codex_account_summary_override)
+          end
+
           File.rm_rf(workflow_root)
         end)
 

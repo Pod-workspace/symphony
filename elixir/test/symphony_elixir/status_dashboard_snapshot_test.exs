@@ -12,6 +12,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          running: [],
          retrying: [],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         account: account_summary(),
          rate_limits: nil
        }}
 
@@ -37,6 +38,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          running: [],
          retrying: [],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         account: account_summary(),
          rate_limits: nil
        }}
 
@@ -74,6 +76,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            total_tokens: 268_500,
            seconds_running: 4_321
          },
+         account: account_summary(),
          rate_limits: %{
            limit_id: "gpt-5",
            primary: %{remaining: 12_345, limit: 20_000, reset_in_seconds: 30},
@@ -127,6 +130,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            })
          ],
          codex_totals: %{input_tokens: 18_000, output_tokens: 2_200, total_tokens: 20_200, seconds_running: 2_700},
+         account: account_summary(),
          rate_limits: %{
            limit_id: "gpt-5",
            primary: %{remaining: 0, limit: 20_000, reset_in_seconds: 95},
@@ -152,6 +156,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            })
          ],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         account: account_summary(),
          rate_limits: nil
        }}
 
@@ -183,6 +188,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          ],
          retrying: [],
          codex_totals: %{input_tokens: 90, output_tokens: 12, total_tokens: 102, seconds_running: 75},
+         account: account_summary(),
          rate_limits: %{
            limit_id: "priority-tier",
            primary: %{remaining: 100, limit: 100, reset_in_seconds: 1},

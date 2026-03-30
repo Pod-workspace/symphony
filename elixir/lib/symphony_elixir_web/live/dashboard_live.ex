@@ -92,6 +92,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
+            <p class="metric-label">Codex account</p>
+            <p class="metric-value metric-value-account"><%= account_primary(@payload.account) %></p>
+            <p class="metric-detail"><%= account_detail(@payload.account) %></p>
+          </article>
+
+          <article class="metric-card">
             <p class="metric-label">Total tokens</p>
             <p class="metric-value numeric"><%= format_int(@payload.codex_totals.total_tokens) %></p>
             <p class="metric-detail numeric">
@@ -325,6 +331,52 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)
   end
 
+  defp account_primary(nil), do: "Unavailable"
+  defp account_primary(%{status: "signed_out"}), do: "Not signed in"
+  defp account_primary(%{status: "not_required"}), do: "Not required"
+
+  defp account_primary(%{email: email}) when is_binary(email) and email != "", do: email
+  defp account_primary(%{type: "apiKey"}), do: "API key"
+  defp account_primary(%{type: "chatgpt"}), do: "ChatGPT"
+  defp account_primary(%{}), do: "Connected"
+
+  defp account_detail(nil), do: "Unable to query Codex account status."
+  defp account_detail(%{status: "signed_out"}), do: "Codex requires OpenAI auth, but no account is signed in."
+  defp account_detail(%{status: "not_required"}), do: "This Codex runtime does not require OpenAI auth."
+
+  defp account_detail(account) when is_map(account) do
+    [
+      account_type_label(account),
+      account_plan_label(account)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "Connected."
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
   defp pretty_value(nil), do: "n/a"
   defp pretty_value(value), do: inspect(value, pretty: true, limit: :infinity)
+
+  defp account_type_label(%{email: email, type: "chatgpt"})
+       when is_binary(email) and email != "",
+       do: "ChatGPT"
+
+  defp account_type_label(%{type: "apiKey"}), do: "Authenticated with an API key"
+  defp account_type_label(%{type: "chatgpt"}), do: "Authenticated with ChatGPT"
+  defp account_type_label(_account), do: nil
+
+  defp account_plan_label(%{plan_type: plan_type}) when is_binary(plan_type) and plan_type != "" do
+    humanize_account_value(plan_type)
+  end
+
+  defp account_plan_label(_account), do: nil
+
+  defp humanize_account_value(value) when is_binary(value) do
+    value
+    |> String.replace(~r/[_-]+/, " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
 end
