@@ -984,7 +984,7 @@ defmodule SymphonyElixir.StatusDashboard do
           "n/a"
 
         true ->
-          bucket |> inspect(limit: 6) |> truncate(40)
+          inspect(bucket, limit: :infinity, printable_limit: :infinity)
       end
 
     if is_nil(reset_value) do
@@ -1020,9 +1020,41 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_rate_limit_credits(other), do: "credits #{to_string(other)}"
 
-  defp format_reset_value(value) when is_integer(value), do: "#{format_count(value)}s"
-  defp format_reset_value(value) when is_binary(value), do: value
+  defp format_reset_value(value) when is_integer(value) do
+    case normalize_reset_seconds(value) do
+      {:ok, seconds} -> "#{format_count(seconds)}s"
+      :error -> to_string(value)
+    end
+  end
+
+  defp format_reset_value(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    case Integer.parse(trimmed) do
+      {integer, ""} -> format_reset_value(integer)
+      _ -> value
+    end
+  end
+
   defp format_reset_value(value), do: to_string(value)
+
+  defp normalize_reset_seconds(value) when is_integer(value) and value >= 1_000_000_000_000 do
+    normalize_reset_seconds(div(value, 1000))
+  end
+
+  defp normalize_reset_seconds(value) when is_integer(value) and value >= 1_000_000_000 do
+    {:ok, max(value - current_unix_seconds(), 0)}
+  end
+
+  defp normalize_reset_seconds(value) when is_integer(value) and value >= 0, do: {:ok, value}
+  defp normalize_reset_seconds(_value), do: :error
+
+  defp current_unix_seconds do
+    case Application.get_env(:symphony_elixir, :status_dashboard_now_unix_override) do
+      value when is_integer(value) -> value
+      _ -> System.os_time(:second)
+    end
+  end
 
   defp format_number(value) when is_integer(value), do: format_count(value)
 

@@ -194,6 +194,74 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     Snapshot.assert_dashboard_snapshot!("credits_unlimited", render_snapshot(snapshot_data, 42.0))
   end
 
+  test "absolute rate limit reset timestamps are rendered as countdowns" do
+    with_status_dashboard_now_override(1_700_000_000, fn ->
+      snapshot_data =
+        {:ok,
+         %{
+           running: [],
+           retrying: [],
+           codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+           account: account_summary(),
+           rate_limits: %{
+             limit_id: "codex",
+             primary: %{remaining: 12, limit: 20, reset_at: 1_700_000_045},
+             secondary: %{remaining: 3, limit: 10, resets_at: 1_700_003_600},
+             credits: %{has_credits: true}
+           }
+         }}
+
+      rendered =
+        snapshot_data
+        |> render_snapshot(0.0)
+        |> Snapshot.strip_ansi()
+
+      assert rendered =~ "primary 12/20 reset 45s"
+      assert rendered =~ "secondary 3/10 reset 3,600s"
+      assert rendered =~ "credits available"
+    end)
+  end
+
+  test "rate limit status line keeps full bucket details when only usage percentages are provided" do
+    with_status_dashboard_now_override(1_700_000_000, fn ->
+      snapshot_data =
+        {:ok,
+         %{
+           running: [],
+           retrying: [],
+           codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+           account: account_summary(),
+           rate_limits: %{
+             limit_id: "codex",
+             primary: %{
+               "resets_at" => 1_700_005_397,
+               "used_percentage" => 87.5,
+               "window_duration_mins" => 300
+             },
+             secondary: %{
+               "resets_at" => 1_700_464_953,
+               "used_percentage" => 12.5
+             },
+             credits: nil
+           }
+         }}
+
+      rate_limits_line =
+        snapshot_data
+        |> render_snapshot(0.0)
+        |> Snapshot.strip_ansi()
+        |> String.split("\n")
+        |> Enum.find(&String.contains?(&1, "Rate Limits:"))
+
+      assert rate_limits_line =~ ~s("used_percentage" => 87.5)
+      assert rate_limits_line =~ ~s("window_duration_mins" => 300)
+      assert rate_limits_line =~ ~s("used_percentage" => 12.5)
+      assert rate_limits_line =~ "reset 5,397s"
+      assert rate_limits_line =~ "reset 464,953s"
+      refute rate_limits_line =~ "used_perce..."
+    end)
+  end
+
   defp render_snapshot(snapshot_data, tps) do
     StatusDashboard.format_snapshot_content_for_test(snapshot_data, tps, @terminal_columns)
   end
@@ -283,6 +351,32 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
           }
         }
       }
+    }
+  end
+
+  defp with_status_dashboard_now_override(now_unix_seconds, fun) when is_function(fun, 0) do
+    previous_override = Application.get_env(:symphony_elixir, :status_dashboard_now_unix_override)
+
+    on_exit(fn ->
+      if is_nil(previous_override) do
+        Application.delete_env(:symphony_elixir, :status_dashboard_now_unix_override)
+      else
+        Application.put_env(:symphony_elixir, :status_dashboard_now_unix_override, previous_override)
+      end
+    end)
+
+    Application.put_env(:symphony_elixir, :status_dashboard_now_unix_override, now_unix_seconds)
+    fun.()
+  end
+
+  defp account_summary do
+    %{
+      status: "ready",
+      type: "chatgpt",
+      auth_mode: "chatgpt",
+      email: "agent@example.com",
+      plan_type: "pro",
+      requires_openai_auth: true
     }
   end
 end
