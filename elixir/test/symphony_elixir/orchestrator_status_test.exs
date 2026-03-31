@@ -1015,6 +1015,42 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert rendered =~ "http://127.0.0.1:4000/"
   end
 
+  test "status dashboard uses the configured host override when rendering the dashboard url" do
+    previous_port_override = Application.get_env(:symphony_elixir, :server_port_override)
+    previous_host_override = Application.get_env(:symphony_elixir, :server_host_override)
+
+    on_exit(fn ->
+      if is_nil(previous_port_override) do
+        Application.delete_env(:symphony_elixir, :server_port_override)
+      else
+        Application.put_env(:symphony_elixir, :server_port_override, previous_port_override)
+      end
+
+      if is_nil(previous_host_override) do
+        Application.delete_env(:symphony_elixir, :server_host_override)
+      else
+        Application.put_env(:symphony_elixir, :server_host_override, previous_host_override)
+      end
+    end)
+
+    Application.put_env(:symphony_elixir, :server_port_override, 4000)
+    Application.put_env(:symphony_elixir, :server_host_override, "dashboard.internal")
+
+    snapshot_data =
+      {:ok,
+       %{
+         running: [],
+         retrying: [],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil
+       }}
+
+    rendered = StatusDashboard.format_snapshot_content_for_test(snapshot_data, 0.0)
+
+    assert rendered =~ "│ Dashboard:"
+    assert rendered =~ "http://dashboard.internal:4000/"
+  end
+
   test "status dashboard prefers the bound server port and normalizes wildcard hosts" do
     assert StatusDashboard.dashboard_url_for_test("0.0.0.0", 0, 43_123) ==
              "http://127.0.0.1:43123/"

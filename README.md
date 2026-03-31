@@ -34,6 +34,8 @@ The state machine lives in `WORKFLOW.md` — a markdown file with YAML frontmatt
 3. In WORKFLOW.md, set `tracker.project_slug` and `hooks.after_create` (clone your repo + setup commands)
 4. Add **Rework**, **Human Review**, **Merging** as custom states in Linear (Team Settings → Workflow)
 5. Commit, push, then: `mise exec -- ./bin/symphony /path/to/your-repo/WORKFLOW.md`
+   - Add `--port 4003` to enable the dashboard, and `--host 0.0.0.0` if it needs to be reachable
+     off-host.
 
 **[Getting Started with OpenAI Symphony](https://x.com/odysseus0z/status/2031850264240800131)** — full walkthrough with context on why these defaults matter.
 

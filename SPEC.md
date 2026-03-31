@@ -577,6 +577,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `codex.stall_timeout_ms`: integer, default `300000`
 - `server.port` (extension): integer, optional; enables the optional HTTP server, `0` may be used
   for ephemeral local bind, and CLI `--port` overrides it
+- `server.host` (extension): string, optional; controls the optional HTTP server bind host, and CLI
+  `--host` overrides it
 
 ## 7. Orchestration State Machine
 
@@ -1368,12 +1370,14 @@ Enablement (extension):
 - Start the HTTP server when `server.port` is present in `WORKFLOW.md` front matter.
 - `server.port` is extension configuration and is intentionally not part of the core front-matter
   schema in Section 5.3.
-- Precedence: CLI `--port` overrides `server.port` when both are present.
+- Precedence: CLI `--port` overrides `server.port` and CLI `--host` overrides `server.host` when
+  both are present.
 - `server.port` must be an integer. Positive values bind that port. `0` may be used to request an
   ephemeral port for local development and tests.
+- `server.host` must be a non-empty host string when configured.
 - Implementations should bind loopback by default (`127.0.0.1` or host equivalent) unless explicitly
   configured otherwise.
-- Changes to HTTP listener settings (for example `server.port`) do not need to hot-rebind;
+- Changes to HTTP listener settings (for example `server.port` or `server.host`) do not need to hot-rebind;
   restart-required behavior is conformant.
 
 #### 13.7.1 Human-Readable Dashboard (`/`)
@@ -2091,8 +2095,9 @@ Use the same validation profiles as Section 17:
 
 ### 18.2 Recommended Extensions (Not Required for Conformance)
 
-- Optional HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and
-  exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
+- Optional HTTP server honors CLI `--port` over `server.port` and CLI `--host` over `server.host`,
+  uses a safe default bind host, and exposes the baseline endpoints/error semantics in Section 13.7
+  if shipped.
 - Optional `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the
   app-server session using configured Symphony auth.
 - TODO: Persist retry queue and session metadata across process restarts.

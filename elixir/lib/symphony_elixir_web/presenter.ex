@@ -3,8 +3,8 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
   alias SymphonyElixir.Codex.Account, as: CodexAccount
+  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do

@@ -6,8 +6,8 @@ defmodule SymphonyElixir.StatusDashboard do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, HttpServer}
   alias SymphonyElixir.Codex.Account, as: CodexAccount
+  alias SymphonyElixir.{Config, HttpServer}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -434,7 +434,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 
   defp dashboard_url do
-    dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
+    dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())
   end
 
   defp dashboard_url(_host, nil, _bound_port), do: nil

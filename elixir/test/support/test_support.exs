@@ -50,6 +50,7 @@ defmodule SymphonyElixir.TestSupport do
         on_exit(fn ->
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
+          Application.delete_env(:symphony_elixir, :server_host_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           CodexAccount.clear_cache_for_test()
