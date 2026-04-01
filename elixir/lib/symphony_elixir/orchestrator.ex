@@ -513,8 +513,8 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  defp priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority
-  defp priority_rank(_priority), do: 5
+  defp priority_rank(priority) when is_integer(priority) and priority in 1..5, do: priority
+  defp priority_rank(_priority), do: 6
 
   defp issue_created_at_sort_key(%Issue{created_at: %DateTime{} = created_at}) do
     DateTime.to_unix(created_at, :microsecond)

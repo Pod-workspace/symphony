@@ -108,12 +108,9 @@ defmodule SymphonyElixir.CoreTest do
     assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/openai/symphony ."
     assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-
-    before_remove = Map.get(hooks, "before_remove")
-    assert before_remove =~ "branch=$(git branch --show-current"
-    assert before_remove =~ "gh pr list --head"
-    assert before_remove =~ "gh pr close"
-    assert before_remove =~ "Closing because the Linear issue for branch"
+    assert Map.get(hooks, "before_remove") =~ "gh pr list --head \"$branch\""
+    assert Map.get(hooks, "before_remove") =~ "gh pr close \"$pr\""
+    assert Map.get(hooks, "before_remove") =~ "Closing because the Linear issue for branch"
 
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
@@ -152,6 +149,41 @@ defmodule SymphonyElixir.CoreTest do
     )
 
     assert Config.settings!().tracker.assignee == env_assignee
+  end
+
+  test "notion tracker validates required settings and resolves env-backed auth" do
+    previous_notion_api_key = System.get_env("NOTION_API_KEY")
+
+    on_exit(fn -> restore_env("NOTION_API_KEY", previous_notion_api_key) end)
+    System.delete_env("NOTION_API_KEY")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_api_token: nil,
+      tracker_project_slug: nil,
+      tracker_data_source_id: nil
+    )
+
+    assert {:error, :missing_notion_api_token} = Config.validate!()
+
+    System.put_env("NOTION_API_KEY", "notion-token")
+
+    assert Config.settings!().tracker.api_key == "notion-token"
+    assert Config.settings!().tracker.endpoint == "https://api.notion.com/v1"
+    assert {:error, :missing_notion_data_source_id} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_api_token: nil,
+      tracker_project_slug: nil,
+      tracker_data_source_id: "data-source"
+    )
+
+    assert Config.settings!().tracker.api_key == "notion-token"
+    assert Config.settings!().tracker.data_source_id == "data-source"
+    assert :ok = Config.validate!()
   end
 
   test "workflow file path defaults to WORKFLOW.md in the current working directory when app env is unset" do
@@ -841,7 +873,7 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a Linear issue."
+    assert prompt =~ "You are working on an issue."
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Make fallback prompt useful"
     assert prompt =~ "Body:"

@@ -496,6 +496,30 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Enum.map(sorted, & &1.identifier) == ["MT-200", "MT-201", "MT-199"]
   end
 
+  test "orchestrator treats P5 as an explicit lowest priority tier before unset priorities" do
+    explicit_p5 = %Issue{
+      id: "issue-p5",
+      identifier: "MT-500",
+      title: "Explicit P5",
+      state: "Todo",
+      priority: 5,
+      created_at: ~U[2026-01-03 00:00:00Z]
+    }
+
+    unset_priority = %Issue{
+      id: "issue-unset",
+      identifier: "MT-501",
+      title: "Unset priority",
+      state: "Todo",
+      priority: nil,
+      created_at: ~U[2025-01-01 00:00:00Z]
+    }
+
+    sorted = Orchestrator.sort_issues_for_dispatch_for_test([unset_priority, explicit_p5])
+
+    assert Enum.map(sorted, & &1.identifier) == ["MT-500", "MT-501"]
+  end
+
   test "todo issue with non-terminal blocker is not dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
@@ -933,6 +957,39 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     config = Config.settings!()
     assert config.tracker.api_key == "env:#{api_key_env_var}"
     assert config.workspace.root == Path.expand("env:#{workspace_env_var}")
+  end
+
+  test "config deep merges generic notion tracker defaults" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_notion: %{
+        properties: %{
+          title: "Task",
+          priority: "Priority"
+        },
+        identifier: %{
+          prefix: "GEN"
+        },
+        priority_map: %{
+          "5" => "P5"
+        }
+      }
+    )
+
+    config = Config.settings!()
+
+    assert config.tracker.endpoint == "https://api.notion.com/v1"
+    assert get_in(config.tracker.notion, ["version"]) == "2026-03-11"
+    assert get_in(config.tracker.notion, ["properties", "title"]) == "Task"
+    assert get_in(config.tracker.notion, ["properties", "state"]) == "Symphony State"
+    assert get_in(config.tracker.notion, ["properties", "id_number"]) == "ID"
+    assert get_in(config.tracker.notion, ["properties", "priority"]) == "Priority"
+    assert get_in(config.tracker.notion, ["identifier", "prefix"]) == "GEN"
+    assert get_in(config.tracker.notion, ["priority_map", "5"]) == "P5"
+    assert get_in(config.tracker.notion, ["workpad", "heading"]) == "Codex Workpad"
+    assert get_in(config.tracker.notion, ["workpad", "rewrite_strategy"]) == "managed_markdown_section"
   end
 
   test "config supports per-state max concurrent agent overrides" do

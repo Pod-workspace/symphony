@@ -12,6 +12,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert graphql_spec["inputSchema"]["required"] == ["query"]
   end
 
+  test "tool_specs switches to notion_api for notion trackers" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    specs = DynamicTool.tool_specs()
+    notion_spec = Enum.find(specs, &(&1["name"] == "notion_api"))
+    sync_spec = Enum.find(specs, &(&1["name"] == "sync_workpad"))
+
+    assert notion_spec != nil
+    assert notion_spec["description"] =~ "Notion"
+    assert notion_spec["inputSchema"]["required"] == ["method", "path"]
+    assert sync_spec != nil
+  end
+
   test "unsupported tools return a failure payload with the supported tool list" do
     response = DynamicTool.execute("not_a_real_tool", %{})
 
@@ -366,6 +383,151 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
            ] = response["contentItems"]
   end
 
+  test "notion_api returns successful REST responses as tool text" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    test_pid = self()
+
+    response =
+      DynamicTool.execute(
+        "notion_api",
+        %{
+          "method" => "PATCH",
+          "path" => "/pages/page-1",
+          "query" => %{"filter_properties[]" => ["Name"]},
+          "body" => %{"archived" => false}
+        },
+        notion_request: fn method, path, opts ->
+          send(test_pid, {:notion_request_called, method, path, opts})
+          {:ok, %{"object" => "page", "id" => "page-1"}}
+        end
+      )
+
+    assert_received {:notion_request_called, "PATCH", "/pages/page-1", [query: %{"filter_properties[]" => ["Name"]}, body: %{"archived" => false}]}
+    assert response["success"] == true
+
+    assert [%{"text" => text}] = response["contentItems"]
+    assert Jason.decode!(text) == %{"object" => "page", "id" => "page-1"}
+  end
+
+  test "notion_api omits absent query and body maps" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    test_pid = self()
+
+    response =
+      DynamicTool.execute(
+        "notion_api",
+        %{"method" => "GET", "path" => "/pages/page-1"},
+        notion_request: fn method, path, opts ->
+          send(test_pid, {:notion_request_called, method, path, opts})
+          {:ok, %{"object" => "page"}}
+        end
+      )
+
+    assert_received {:notion_request_called, "GET", "/pages/page-1", [query: nil, body: nil]}
+    assert response["success"] == true
+  end
+
+  test "notion_api validates required arguments and formats common failures" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    missing_method =
+      DynamicTool.execute(
+        "notion_api",
+        %{"path" => "/pages/page-1"},
+        notion_request: fn _method, _path, _opts ->
+          flunk("notion request should not be called when method is missing")
+        end
+      )
+
+    assert missing_method["success"] == false
+    assert [%{"text" => missing_method_text}] = missing_method["contentItems"]
+
+    assert Jason.decode!(missing_method_text) == %{
+             "error" => %{
+               "message" => "`notion_api` requires a non-empty `method` string."
+             }
+           }
+
+    invalid_query =
+      DynamicTool.execute(
+        "notion_api",
+        %{"method" => "GET", "path" => "/pages/page-1", "query" => ["bad"]},
+        notion_request: fn _method, _path, _opts ->
+          flunk("notion request should not be called when query is invalid")
+        end
+      )
+
+    assert invalid_query["success"] == false
+    assert [%{"text" => invalid_query_text}] = invalid_query["contentItems"]
+
+    assert Jason.decode!(invalid_query_text) == %{
+             "error" => %{
+               "message" => "`notion_api.query` must be a JSON object when provided."
+             }
+           }
+
+    missing_token =
+      DynamicTool.execute(
+        "notion_api",
+        %{"method" => "GET", "path" => "/pages/page-1"},
+        notion_request: fn _method, _path, _opts -> {:error, :missing_notion_api_token} end
+      )
+
+    assert [%{"text" => missing_token_text}] = missing_token["contentItems"]
+
+    assert Jason.decode!(missing_token_text) == %{
+             "error" => %{
+               "message" => "Symphony is missing Notion auth. Set `tracker.api_key` in `WORKFLOW.md` or export `NOTION_API_KEY`."
+             }
+           }
+
+    invalid_method =
+      DynamicTool.execute(
+        "notion_api",
+        %{"method" => "TRACE", "path" => "/pages/page-1"},
+        notion_request: fn _method, _path, _opts -> {:error, :invalid_notion_method} end
+      )
+
+    assert [%{"text" => invalid_method_text}] = invalid_method["contentItems"]
+
+    assert Jason.decode!(invalid_method_text) == %{
+             "error" => %{
+               "message" => "`notion_api.method` must be one of GET, POST, PATCH, PUT, or DELETE."
+             }
+           }
+
+    status_error =
+      DynamicTool.execute(
+        "notion_api",
+        %{"method" => "PATCH", "path" => "/pages/page-1"},
+        notion_request: fn _method, _path, _opts -> {:error, {:notion_api_status, 409, %{"code" => "conflict_error"}}} end
+      )
+
+    assert [%{"text" => status_error_text}] = status_error["contentItems"]
+
+    assert Jason.decode!(status_error_text) == %{
+             "error" => %{
+               "message" => "Notion API request failed with HTTP 409.",
+               "status" => 409,
+               "body" => %{"code" => "conflict_error"}
+             }
+           }
+  end
+
   # ── sync_workpad ───────────────────────────────────────────────────
 
   defp write_tmp_workpad(content) do
@@ -470,5 +632,38 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert response["success"] == false
     assert [%{"text" => text}] = response["contentItems"]
     assert Jason.decode!(text)["error"]["message"] =~ "cannot read"
+  end
+
+  test "sync_workpad delegates to notion workpad sync for notion trackers" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    test_pid = self()
+    path = write_tmp_workpad("## Local Workpad\n\nProgress.")
+
+    response =
+      DynamicTool.execute(
+        "sync_workpad",
+        %{"issue_id" => "page-1", "file_path" => path, "comment_id" => "ignored-comment-id"},
+        notion_sync_workpad: fn issue_id, body ->
+          send(test_pid, {:notion_sync_workpad_called, issue_id, body})
+
+          {:ok,
+           %{
+             "data" => %{
+               "syncWorkpad" => %{"id" => issue_id, "url" => "https://notion.so/page-1", "heading" => "Codex Workpad"}
+             }
+           }}
+        end,
+        linear_client: fn _query, _variables, _opts ->
+          flunk("linear client should not be called for notion workpad sync")
+        end
+      )
+
+    assert_received {:notion_sync_workpad_called, "page-1", "## Local Workpad\n\nProgress."}
+    assert response["success"] == true
   end
 end

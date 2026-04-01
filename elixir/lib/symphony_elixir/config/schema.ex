@@ -43,15 +43,32 @@ defmodule SymphonyElixir.Config.Schema do
     import Ecto.Changeset
 
     @primary_key false
+    @notion_defaults %{
+      "version" => "2026-03-11",
+      "properties" => %{
+        "title" => "Name",
+        "state" => "Symphony State",
+        "id_number" => "ID"
+      },
+      "identifier" => %{},
+      "state_map" => %{},
+      "priority_map" => %{},
+      "workpad" => %{
+        "heading" => "Codex Workpad",
+        "rewrite_strategy" => "managed_markdown_section"
+      }
+    }
 
     embedded_schema do
       field(:kind, :string)
-      field(:endpoint, :string, default: "https://api.linear.app/graphql")
+      field(:endpoint, :string)
       field(:api_key, :string)
       field(:project_slug, :string)
+      field(:data_source_id, :string)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:notion, :map, default: %{})
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -59,10 +76,23 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :project_slug,
+          :data_source_id,
+          :assignee,
+          :active_states,
+          :terminal_states,
+          :notion
+        ],
         empty_values: []
       )
     end
+
+    @spec notion_defaults() :: map()
+    def notion_defaults, do: @notion_defaults
   end
 
   defmodule Polling do
@@ -340,10 +370,19 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp finalize_settings(settings) do
+    tracker_kind = settings.tracker.kind
+
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+      | endpoint: resolve_tracker_endpoint(tracker_kind, settings.tracker.endpoint),
+        api_key: resolve_secret_setting(settings.tracker.api_key, tracker_api_key_fallback(tracker_kind)),
+        project_slug: resolve_secret_setting(settings.tracker.project_slug, nil),
+        data_source_id: resolve_secret_setting(settings.tracker.data_source_id, nil),
+        assignee: resolve_secret_setting(settings.tracker.assignee, tracker_assignee_fallback(tracker_kind)),
+        notion:
+          settings.tracker.notion
+          |> normalize_optional_map()
+          |> then(&deep_merge(Tracker.notion_defaults(), &1 || %{}))
     }
 
     workspace = %{
@@ -372,6 +411,16 @@ defmodule SymphonyElixir.Config.Schema do
   defp normalize_optional_map(nil), do: nil
   defp normalize_optional_map(value) when is_map(value), do: normalize_keys(value)
 
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      if is_map(left_value) and is_map(right_value) do
+        deep_merge(left_value, right_value)
+      else
+        right_value
+      end
+    end)
+  end
+
   defp normalize_key(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_key(value), do: to_string(value)
 
@@ -395,6 +444,8 @@ defmodule SymphonyElixir.Config.Schema do
       resolved -> resolved
     end
   end
+
+  defp resolve_secret_setting(_value, _fallback), do: nil
 
   defp resolve_path_value(value, default) when is_binary(value) do
     case normalize_path_token(value) do
@@ -422,6 +473,20 @@ defmodule SymphonyElixir.Config.Schema do
         value
     end
   end
+
+  defp tracker_api_key_fallback(nil), do: System.get_env("LINEAR_API_KEY")
+  defp tracker_api_key_fallback("linear"), do: System.get_env("LINEAR_API_KEY")
+  defp tracker_api_key_fallback("notion"), do: System.get_env("NOTION_API_KEY")
+  defp tracker_api_key_fallback(_kind), do: nil
+
+  defp tracker_assignee_fallback(nil), do: System.get_env("LINEAR_ASSIGNEE")
+  defp tracker_assignee_fallback("linear"), do: System.get_env("LINEAR_ASSIGNEE")
+  defp tracker_assignee_fallback(_kind), do: nil
+
+  defp resolve_tracker_endpoint("notion", nil), do: "https://api.notion.com/v1"
+  defp resolve_tracker_endpoint(_kind, nil), do: "https://api.linear.app/graphql"
+  defp resolve_tracker_endpoint(_kind, endpoint) when is_binary(endpoint), do: normalize_secret_value(endpoint)
+  defp resolve_tracker_endpoint(_kind, _endpoint), do: nil
 
   defp normalize_path_token(value) when is_binary(value) do
     case env_reference_name(value) do

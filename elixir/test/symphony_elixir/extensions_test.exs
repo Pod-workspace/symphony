@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Notion.Adapter, as: NotionAdapter
   alias SymphonyElixir.Tracker.Memory
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -35,6 +36,41 @@ defmodule SymphonyElixir.ExtensionsTest do
 
         _ ->
           Process.get({__MODULE__, :graphql_result})
+      end
+    end
+  end
+
+  defmodule FakeNotionClient do
+    def fetch_candidate_issues do
+      send(self(), :notion_fetch_candidate_issues_called)
+      {:ok, [:notion_candidate]}
+    end
+
+    def fetch_issues_by_states(states) do
+      send(self(), {:notion_fetch_issues_by_states_called, states})
+      {:ok, states}
+    end
+
+    def fetch_issue_states_by_ids(issue_ids) do
+      send(self(), {:notion_fetch_issue_states_by_ids_called, issue_ids})
+      {:ok, issue_ids}
+    end
+
+    def create_comment(issue_id, body) do
+      send(self(), {:notion_create_comment_called, issue_id, body})
+
+      case Process.get({__MODULE__, :create_comment_result}) do
+        nil -> :ok
+        result -> result
+      end
+    end
+
+    def update_issue_state(issue_id, state_name) do
+      send(self(), {:notion_update_issue_state_called, issue_id, state_name})
+
+      case Process.get({__MODULE__, :update_issue_state_result}) do
+        nil -> :ok
+        result -> result
       end
     end
   end
@@ -79,12 +115,19 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   setup do
     linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
+    notion_client_module = Application.get_env(:symphony_elixir, :notion_client_module)
 
     on_exit(fn ->
       if is_nil(linear_client_module) do
         Application.delete_env(:symphony_elixir, :linear_client_module)
       else
         Application.put_env(:symphony_elixir, :linear_client_module, linear_client_module)
+      end
+
+      if is_nil(notion_client_module) do
+        Application.delete_env(:symphony_elixir, :notion_client_module)
+      else
+        Application.put_env(:symphony_elixir, :notion_client_module, notion_client_module)
       end
     end)
 
@@ -186,7 +229,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     WorkflowStore.force_reload()
   end
 
-  test "tracker delegates to memory and linear adapters" do
+  test "tracker delegates to memory, linear, and notion adapters" do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -208,6 +251,14 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    assert SymphonyElixir.Tracker.adapter() == NotionAdapter
   end
 
   test "linear adapter delegates reads and validates mutation responses" do
@@ -322,6 +373,31 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+  end
+
+  test "notion adapter delegates to the configured client module" do
+    Application.put_env(:symphony_elixir, :notion_client_module, FakeNotionClient)
+
+    assert {:ok, [:notion_candidate]} = NotionAdapter.fetch_candidate_issues()
+    assert_received :notion_fetch_candidate_issues_called
+
+    assert {:ok, ["Todo"]} = NotionAdapter.fetch_issues_by_states(["Todo"])
+    assert_received {:notion_fetch_issues_by_states_called, ["Todo"]}
+
+    assert {:ok, ["page-1"]} = NotionAdapter.fetch_issue_states_by_ids(["page-1"])
+    assert_received {:notion_fetch_issue_states_by_ids_called, ["page-1"]}
+
+    assert :ok = NotionAdapter.create_comment("page-1", "hello")
+    assert_received {:notion_create_comment_called, "page-1", "hello"}
+
+    assert :ok = NotionAdapter.update_issue_state("page-1", "Done")
+    assert_received {:notion_update_issue_state_called, "page-1", "Done"}
+
+    Process.put({FakeNotionClient, :create_comment_result}, {:error, :boom})
+    assert {:error, :boom} = NotionAdapter.create_comment("page-2", "boom")
+
+    Process.put({FakeNotionClient, :update_issue_state_result}, {:error, :broken})
+    assert {:error, :broken} = NotionAdapter.update_issue_state("page-2", "Broken")
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
