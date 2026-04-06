@@ -627,7 +627,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Agent update"
     assert html =~ "Codex account"
     assert html =~ "agent@example.com"
     assert html =~ "ChatGPT"

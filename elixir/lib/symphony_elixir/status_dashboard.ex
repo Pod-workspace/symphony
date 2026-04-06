@@ -365,7 +365,8 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow) <>
              colorize(" | ", @ansi_gray) <>
              colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
-           colorize("│ Codex Account: ", @ansi_bold) <> format_account_summary(account),
+           colorize("│ Agent: ", @ansi_bold) <> colorize(agent_runtime_label(), @ansi_cyan),
+           colorize("│ Account: ", @ansi_bold) <> format_account_summary(account),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
            project_link_lines,
            project_refresh_line,
@@ -550,6 +551,25 @@ defmodule SymphonyElixir.StatusDashboard do
           String.t() | nil
   def dashboard_url_for_test(host, configured_port, bound_port),
     do: dashboard_url(host, configured_port, bound_port)
+
+  defp agent_runtime_label do
+    settings = Config.settings!()
+    adapter = settings.agent.agent_adapter
+
+    model =
+      case adapter do
+        "claude" -> settings.claude.model
+        _ -> nil
+      end
+
+    if is_binary(model) and model != "" do
+      "#{adapter} . #{model}"
+    else
+      adapter
+    end
+  rescue
+    _ -> "unknown"
+  end
 
   defp snapshot_payload do
     if Process.whereis(Orchestrator) do
@@ -1263,8 +1283,55 @@ defmodule SymphonyElixir.StatusDashboard do
   defp humanize_codex_event(:startup_failed, message, _payload), do: "startup failed: #{format_reason(message)}"
   defp humanize_codex_event(:turn_failed, _message, payload), do: humanize_codex_method("turn/failed", payload)
   defp humanize_codex_event(:turn_cancelled, _message, _payload), do: "turn cancelled"
-  defp humanize_codex_event(:malformed, _message, _payload), do: "malformed JSON event from codex"
+  defp humanize_codex_event(:malformed, _message, _payload), do: "malformed JSON event from agent"
+
+  defp humanize_codex_event(:notification, _message, payload) do
+    humanize_claude_stream_event(payload)
+  end
+
   defp humanize_codex_event(_event, _message, _payload), do: nil
+
+  # Claude Code stream-json event humanization
+
+  defp humanize_claude_stream_event(%{"type" => "stream_event", "event" => event}) do
+    humanize_claude_api_event(event)
+  end
+
+  defp humanize_claude_stream_event(%{"type" => "system", "subtype" => "api_retry"} = payload) do
+    "API retry attempt #{Map.get(payload, "attempt", "?")} (#{Map.get(payload, "error", "unknown")})"
+  end
+
+  defp humanize_claude_stream_event(_payload), do: nil
+
+  defp humanize_claude_api_event(%{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}})
+       when is_binary(text) do
+    trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim()
+    if trimmed != "", do: "writing: #{trimmed}", else: nil
+  end
+
+  defp humanize_claude_api_event(%{"type" => "content_block_delta", "delta" => %{"type" => "thinking_delta"}}) do
+    "thinking..."
+  end
+
+  defp humanize_claude_api_event(%{"type" => "content_block_start", "content_block" => %{"type" => "tool_use", "name" => name}})
+       when is_binary(name) do
+    "using tool: #{name}"
+  end
+
+  defp humanize_claude_api_event(%{"type" => "content_block_start", "content_block" => %{"type" => "thinking"}}) do
+    "thinking..."
+  end
+
+  defp humanize_claude_api_event(%{"type" => "message_start"}) do
+    "message started"
+  end
+
+  defp humanize_claude_api_event(%{"type" => "message_delta", "delta" => %{"stop_reason" => reason}})
+       when is_binary(reason) do
+    "turn ending: #{reason}"
+  end
+
+  defp humanize_claude_api_event(_event), do: nil
 
   defp unwrap_codex_message_payload(%{} = message) do
     cond do

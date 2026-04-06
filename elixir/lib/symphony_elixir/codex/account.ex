@@ -30,11 +30,14 @@ defmodule SymphonyElixir.Codex.Account do
         account_summary
 
       :error ->
-        cached_summary()
+        case Config.settings!().agent.agent_adapter do
+          "codex" -> cached_summary()
+          adapter -> non_codex_summary(adapter)
+        end
     end
   rescue
     error in [ArgumentError, RuntimeError] ->
-      Logger.debug("Failed reading Codex account summary: #{Exception.message(error)}")
+      Logger.debug("Failed reading account summary: #{Exception.message(error)}")
       nil
   end
 
@@ -45,6 +48,36 @@ defmodule SymphonyElixir.Codex.Account do
     :ok
   rescue
     ArgumentError -> :ok
+  end
+
+  defp non_codex_summary(adapter) do
+    api_key_status =
+      case adapter do
+        "claude" ->
+          key = Config.settings!().claude.api_key
+
+          if is_binary(key) and key != "" do
+            "ready"
+          else
+            case System.get_env("ANTHROPIC_API_KEY") do
+              nil -> "signed_out"
+              "" -> "signed_out"
+              _ -> "ready"
+            end
+          end
+
+        _ ->
+          "not_required"
+      end
+
+    %{
+      status: api_key_status,
+      type: "apiKey",
+      auth_mode: "apikey",
+      email: nil,
+      plan_type: adapter,
+      requires_openai_auth: false
+    }
   end
 
   defp cached_summary do

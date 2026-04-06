@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in its workspace with Codex.
+  Executes a single issue in its workspace using the configured coding agent.
   """
 
   require Logger
-  alias SymphonyElixir.Codex.AppServer
+  alias SymphonyElixir.Agent.Adapter
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
@@ -47,23 +47,33 @@ defmodule SymphonyElixir.AgentRunner do
   defp send_codex_update(_recipient, _issue, _message), do: :ok
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts) do
-    max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    adapter_type = Config.settings!().agent.agent_adapter
+    adapter = Adapter.create(adapter_type)
 
-    with {:ok, session} <- AppServer.start_session(workspace) do
+    # Adapters like Claude handle multi-turn internally via --max-turns,
+    # so the external loop should only run once. Codex uses the external
+    # loop because its app-server thread persists context between turns.
+    external_max_turns =
+      case adapter_type do
+        "codex" -> Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
+        _ -> 1
+      end
+
+    with {:ok, session} <- adapter.start_session(workspace) do
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        do_run_codex_turns(adapter, session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, external_max_turns)
       after
-        AppServer.stop_session(session)
+        adapter.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_codex_turns(adapter, app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
-           AppServer.run_turn(
+           adapter.run_turn(
              app_session,
              prompt,
              issue,
@@ -76,6 +86,7 @@ defmodule SymphonyElixir.AgentRunner do
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
           do_run_codex_turns(
+            adapter,
             app_session,
             workspace,
             refreshed_issue,

@@ -418,7 +418,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_stalled_running_issues(%State{} = state) do
-    timeout_ms = Config.settings!().codex.stall_timeout_ms
+    timeout_ms = adapter_stall_timeout_ms()
 
     cond do
       timeout_ms <= 0 ->
@@ -451,10 +451,19 @@ defmodule SymphonyElixir.Orchestrator do
       |> terminate_running_issue(issue_id, false)
       |> schedule_issue_retry(issue_id, next_attempt, %{
         identifier: identifier,
-        error: "stalled for #{elapsed_ms}ms without codex activity"
+        error: "stalled for #{elapsed_ms}ms without agent activity"
       })
     else
       state
+    end
+  end
+
+  defp adapter_stall_timeout_ms do
+    settings = Config.settings!()
+
+    case settings.agent.agent_adapter do
+      "claude" -> settings.claude.stall_timeout_ms
+      _ -> settings.codex.stall_timeout_ms
     end
   end
 

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
+  alias SymphonyElixir.Config.ClaudeConfig
   alias SymphonyElixir.PathSafety
 
   @primary_key false
@@ -139,6 +140,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
+      field(:agent_adapter, :string, default: "codex")
       field(:max_concurrent_agents, :integer, default: 10)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
@@ -147,12 +149,15 @@ defmodule SymphonyElixir.Config.Schema do
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
+      attrs = Schema.normalize_agent_adapter_aliases(attrs)
+
       schema
       |> cast(
         attrs,
-        [:max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_concurrent_agents_by_state],
+        [:agent_adapter, :max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_concurrent_agents_by_state],
         empty_values: []
       )
+      |> validate_inclusion(:agent_adapter, SymphonyElixir.Agent.Adapter.supported_types())
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
@@ -278,6 +283,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:claude, ClaudeConfig, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -328,6 +334,16 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @doc false
+  @spec normalize_agent_adapter_aliases(map()) :: map()
+  def normalize_agent_adapter_aliases(attrs) when is_map(attrs) do
+    # Support both "adapter" and "agent_adapter" keys in WORKFLOW.md
+    case {Map.get(attrs, "adapter"), Map.get(attrs, "agent_adapter")} do
+      {adapter, nil} when is_binary(adapter) -> Map.put(attrs, "agent_adapter", adapter)
+      _ -> attrs
+    end
+  end
+
+  @doc false
   @spec normalize_state_limits(nil | map()) :: map()
   def normalize_state_limits(nil), do: %{}
 
@@ -364,6 +380,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
+    |> cast_embed(:claude, with: &ClaudeConfig.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
@@ -396,7 +413,12 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    claude = %{
+      settings.claude
+      | api_key: resolve_secret_setting(settings.claude.api_key, System.get_env("ANTHROPIC_API_KEY"))
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, claude: claude}
   end
 
   defp normalize_keys(value) when is_map(value) do

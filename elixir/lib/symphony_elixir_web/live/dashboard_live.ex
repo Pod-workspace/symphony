@@ -92,7 +92,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
-            <p class="metric-label">Codex account</p>
+            <p class="metric-label"><%= agent_display_name() %> account</p>
             <p class="metric-value metric-value-account"><%= account_primary(@payload.account) %></p>
             <p class="metric-detail"><%= account_detail(@payload.account) %></p>
           </article>
@@ -108,7 +108,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <article class="metric-card">
             <p class="metric-label">Runtime</p>
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
-            <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
+            <p class="metric-detail">Total agent runtime across completed and active sessions.</p>
           </article>
         </section>
 
@@ -150,7 +150,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <th>State</th>
                     <th>Session</th>
                     <th>Runtime / turns</th>
-                    <th>Codex update</th>
+                    <th>Agent update</th>
                     <th>Tokens</th>
                   </tr>
                 </thead>
@@ -340,9 +340,19 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp account_primary(%{type: "chatgpt"}), do: "ChatGPT"
   defp account_primary(%{}), do: "Connected"
 
-  defp account_detail(nil), do: "Unable to query Codex account status."
-  defp account_detail(%{status: "signed_out"}), do: "Codex requires OpenAI auth, but no account is signed in."
-  defp account_detail(%{status: "not_required"}), do: "This Codex runtime does not require OpenAI auth."
+  defp agent_display_name do
+    case SymphonyElixir.Config.settings!().agent.agent_adapter do
+      "claude" -> "Claude"
+      "codex" -> "Codex"
+      other -> String.capitalize(other)
+    end
+  rescue
+    _ -> "Agent"
+  end
+
+  defp account_detail(nil), do: "Unable to query account status."
+  defp account_detail(%{status: "signed_out"}), do: "Agent requires auth, but no account is signed in."
+  defp account_detail(%{status: "not_required"}), do: "This runtime does not require auth."
 
   defp account_detail(account) when is_map(account) do
     [
