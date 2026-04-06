@@ -465,6 +465,8 @@ defmodule SymphonyElixir.Orchestrator do
       "claude" -> settings.claude.stall_timeout_ms
       _ -> settings.codex.stall_timeout_ms
     end
+  rescue
+    _ -> 300_000
   end
 
   defp stall_elapsed_ms(running_entry, now) do

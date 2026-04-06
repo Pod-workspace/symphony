@@ -58,9 +58,10 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
 
   defp run_claude(workspace, prompt, issue, claude_config, session_id, on_message) do
     prompt_file = write_prompt_file(prompt)
+    mcp_config_file = write_mcp_config()
 
     try do
-      command = build_command(claude_config, prompt_file)
+      command = build_command(claude_config, prompt_file, mcp_config_file)
       env = build_env(claude_config)
 
       Logger.info(
@@ -108,10 +109,11 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
       end
     after
       File.rm(prompt_file)
+      File.rm(mcp_config_file)
     end
   end
 
-  defp build_command(claude_config, prompt_file) do
+  defp build_command(claude_config, prompt_file, mcp_config_file) do
     base = claude_config.command || "claude"
 
     parts = [
@@ -127,6 +129,7 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
       |> maybe_append("--model", claude_config.model)
       |> maybe_append("--effort", claude_config.effort)
       |> maybe_append("--permission-mode", claude_config.permission_mode)
+      |> maybe_append("--mcp-config", mcp_config_file)
       |> maybe_append_list("--allowedTools", claude_config.allowed_tools)
       |> maybe_append_list("--disallowedTools", claude_config.disallowed_tools)
 
@@ -390,6 +393,54 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
     path = Path.join(System.tmp_dir!(), "symphony_claude_prompt_#{System.unique_integer([:positive])}.md")
     File.write!(path, prompt)
     path
+  end
+
+  defp write_mcp_config do
+    workflow_path = SymphonyElixir.Workflow.workflow_file_path()
+    symphony_bin = resolve_symphony_bin()
+    settings = Config.settings!()
+
+    # Pass through env vars the MCP server needs to function:
+    # PATH (for Erlang runtime), tracker API keys, HOME
+    mcp_env =
+      %{}
+      |> put_env("PATH", System.get_env("PATH"))
+      |> put_env("HOME", System.get_env("HOME"))
+      |> put_env("NOTION_API_KEY", settings.tracker.api_key)
+      |> put_env("LINEAR_API_KEY", settings.tracker.api_key)
+
+    config = %{
+      "mcpServers" => %{
+        "symphony" => %{
+          "command" => symphony_bin,
+          "args" => ["mcp-server", workflow_path],
+          "env" => mcp_env
+        }
+      }
+    }
+
+    path = Path.join(System.tmp_dir!(), "symphony_mcp_config_#{System.unique_integer([:positive])}.json")
+    File.write!(path, Jason.encode!(config))
+    path
+  end
+
+  defp put_env(map, _key, nil), do: map
+  defp put_env(map, key, value), do: Map.put(map, key, value)
+
+  defp resolve_symphony_bin do
+    # The escript that's currently running
+    case :escript.script_name() do
+      name when is_list(name) ->
+        path = List.to_string(name)
+        if File.regular?(path), do: Path.expand(path), else: find_symphony_in_path()
+
+      _ ->
+        find_symphony_in_path()
+    end
+  end
+
+  defp find_symphony_in_path do
+    System.find_executable("symphony") || "symphony"
   end
 
   defp generate_session_id do

@@ -19,6 +19,13 @@ defmodule SymphonyElixir.CLI do
         }
 
   @spec main([String.t()]) :: no_return()
+  def main(["mcp-server" | rest]) do
+    case evaluate_mcp_server(rest) do
+      :ok -> System.halt(0)
+      {:error, message} -> IO.puts(:stderr, message); System.halt(1)
+    end
+  end
+
   def main(args) do
     case evaluate(args) do
       :ok ->
@@ -71,6 +78,30 @@ defmodule SymphonyElixir.CLI do
     else
       {:error, "Workflow file not found: #{expanded_path}"}
     end
+  end
+
+  @doc false
+  @spec evaluate_mcp_server([String.t()]) :: :ok | {:error, String.t()}
+  def evaluate_mcp_server([workflow_path]) do
+    expanded = Path.expand(workflow_path)
+
+    if File.regular?(expanded) do
+      :ok = SymphonyElixir.Workflow.set_workflow_file_path(expanded)
+      # Start only the minimal deps needed for tool execution (HTTP client, config)
+      {:ok, _} = Application.ensure_all_started(:req)
+      SymphonyElixir.McpServer.run()
+    else
+      {:error, "Workflow file not found: #{expanded}"}
+    end
+  end
+
+  def evaluate_mcp_server([]) do
+    # Try current directory
+    evaluate_mcp_server(["WORKFLOW.md"])
+  end
+
+  def evaluate_mcp_server(_args) do
+    {:error, "Usage: symphony mcp-server [path-to-WORKFLOW.md]"}
   end
 
   @spec usage_message() :: String.t()
