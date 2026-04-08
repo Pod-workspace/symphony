@@ -231,22 +231,21 @@ defmodule SymphonyElixir.Notion.Client do
   end
 
   defp fetch_pages_by_ids(ids, assignee_filter, include_markdown?) when is_list(ids) do
-    ids
-    |> Enum.reduce_while({:ok, []}, fn page_id, {:ok, acc} ->
-      case retrieve_page(page_id) do
-        {:ok, page} -> {:cont, {:ok, [page | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, pages} ->
-        pages
-        |> Enum.reverse()
-        |> build_issues_from_pages(assignee_filter, include_markdown?, false)
+    pages =
+      ids
+      |> Enum.reduce([], fn page_id, acc ->
+        case retrieve_page(page_id) do
+          {:ok, page} ->
+            [page | acc]
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+          {:error, reason} ->
+            Logger.debug("Skipping blocker page #{page_id}: #{inspect(reason)}")
+            acc
+        end
+      end)
+      |> Enum.reverse()
+
+    build_issues_from_pages(pages, assignee_filter, include_markdown?, false)
   end
 
   defp hydrate_blocker_metadata(issues) when is_list(issues) do
@@ -276,11 +275,11 @@ defmodule SymphonyElixir.Notion.Client do
            %{issue | blocked_by: hydrated_blockers}
          end)}
 
-      {:error, _reason} when blocker_ids == [] ->
+      {:error, _reason} ->
+        # Hydration failed; keep issues with unhydrated blockers.
+        # The orchestrator treats nil-state blockers as blocking (conservative).
+        Logger.warning("Blocker hydration failed; unhydrated blockers will be treated as blocking")
         {:ok, issues}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 

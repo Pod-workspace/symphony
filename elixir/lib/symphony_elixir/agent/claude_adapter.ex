@@ -92,13 +92,14 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
 
           case result do
             {:ok, result_data} ->
-              Logger.info(
-                "Claude session completed for #{issue_context(issue)} session_id=#{session_id}"
-              )
-
+              log_session_result(issue, session_id, result_data)
               {:ok, result_data}
 
-            {:error, _} = error ->
+            {:error, reason} = error ->
+              Logger.error(
+                "Claude session failed for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}"
+              )
+
               safe_close_port(port)
               error
           end
@@ -215,10 +216,10 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
         )
 
       {^port, {:exit_status, 0}} ->
-        # Process exited cleanly without a result event — treat as success
         {:ok, %{result: :process_exited_cleanly}}
 
       {^port, {:exit_status, status}} ->
+        Logger.warning("Claude process exited with status=#{status} session_id=#{session_id}")
         {:error, {:port_exit, status}}
     after
       effective_timeout ->
@@ -244,8 +245,11 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
       {:ok, %{"type" => "result"} = payload} ->
         handle_result_event(payload, on_message, session_id)
 
-      {:ok, %{"type" => "stream_event"} = payload} ->
-        handle_stream_event(payload, on_message, session_id)
+      {:ok, %{"type" => "assistant"} = payload} ->
+        handle_assistant_event(payload, on_message, session_id)
+
+      {:ok, %{"type" => "user"} = payload} ->
+        handle_user_event(payload, on_message, session_id)
 
       {:ok, %{"type" => "system"} = payload} ->
         handle_system_event(payload, on_message, session_id)
@@ -267,18 +271,15 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
 
   defp handle_result_event(payload, on_message, session_id) do
     usage = Map.get(payload, "usage", %{})
+    result_text = Map.get(payload, "result", "")
+    is_error = Map.get(payload, "is_error", false)
+    duration_ms = Map.get(payload, "duration_ms")
+    cost = Map.get(payload, "cost")
+    usage = ensure_total_tokens(usage)
 
-    # Ensure total_tokens is present
-    usage =
-      if is_nil(Map.get(usage, "total_tokens")) do
-        input = Map.get(usage, "input_tokens", 0)
-        output = Map.get(usage, "output_tokens", 0)
-        Map.put(usage, "total_tokens", input + output)
-      else
-        usage
-      end
+    event = if is_error, do: :turn_failed, else: :turn_completed
 
-    emit_message(on_message, :turn_completed, %{
+    emit_message(on_message, event, %{
       payload: payload,
       raw: Jason.encode!(payload),
       details: payload,
@@ -286,46 +287,42 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
       usage: usage
     })
 
-    {:done, {:ok, %{result: :turn_completed, usage: usage, payload: payload}}}
-  end
-
-  defp handle_stream_event(%{"event" => %{"type" => "message_start"} = event} = payload, on_message, session_id) do
-    usage = get_in(event, ["message", "usage"])
-
-    if is_map(usage) do
-      emit_message(on_message, :notification, %{
-        payload: payload,
-        raw: Jason.encode!(payload),
-        session_id: session_id,
-        usage: usage
-      })
-    else
-      emit_message(on_message, :notification, %{
-        payload: payload,
-        raw: Jason.encode!(payload),
-        session_id: session_id
-      })
-    end
-
-    {:continue, nil}
-  end
-
-  defp handle_stream_event(%{"event" => %{"type" => "message_delta"} = event} = payload, on_message, session_id) do
-    usage = Map.get(event, "usage")
-
-    msg =
+    {:done,
+     {:ok,
       %{
-        payload: payload,
-        raw: Jason.encode!(payload),
-        session_id: session_id
-      }
-      |> then(fn m -> if is_map(usage), do: Map.put(m, :usage, usage), else: m end)
+        result: event,
+        result_text: result_text,
+        usage: usage,
+        duration_ms: duration_ms,
+        cost: cost,
+        payload: payload
+      }}}
+  end
 
-    emit_message(on_message, :notification, msg)
+  defp handle_assistant_event(payload, on_message, session_id) do
+    content = get_in(payload, ["message", "content"]) || []
+    summary = summarize_assistant_content(content)
+
+    # Embed summary into payload so it survives summarize_codex_update.
+    # Don't forward per-message usage here — it's non-cumulative and
+    # confuses the orchestrator's delta tracker. The result event
+    # carries the accurate session total.
+    enriched_payload =
+      if is_binary(summary),
+        do: Map.put(payload, "_symphony_summary", summary),
+        else: payload
+
+    emit_message(on_message, :notification, %{
+      payload: enriched_payload,
+      raw: Jason.encode!(payload),
+      session_id: session_id
+    })
+
     {:continue, nil}
   end
 
-  defp handle_stream_event(payload, on_message, session_id) do
+  defp handle_user_event(payload, on_message, session_id) do
+    # User events are tool results flowing back
     emit_message(on_message, :notification, %{
       payload: payload,
       raw: Jason.encode!(payload),
@@ -359,7 +356,58 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
     {:continue, nil}
   end
 
+  defp summarize_assistant_content(content) when is_list(content) do
+    Enum.find_value(content, fn
+      %{"type" => "tool_use", "name" => name} -> "using tool: #{name}"
+      %{"type" => "text", "text" => text} when is_binary(text) ->
+        trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, 120)
+        if trimmed != "", do: "writing: #{trimmed}"
+      %{"type" => "thinking"} -> "thinking..."
+      _ -> nil
+    end)
+  end
+
+  defp summarize_assistant_content(_content), do: nil
+
+  defp ensure_total_tokens(usage) when is_map(usage) do
+    if is_nil(Map.get(usage, "total_tokens")) do
+      input = Map.get(usage, "input_tokens", 0)
+      output = Map.get(usage, "output_tokens", 0)
+      Map.put(usage, "total_tokens", input + output)
+    else
+      usage
+    end
+  end
+
+  defp ensure_total_tokens(usage), do: usage
+
   # ── Helpers ──────────────────────────────────────────────────────────
+
+  defp log_session_result(issue, session_id, result_data) do
+    usage = Map.get(result_data, :usage, %{})
+    input = Map.get(usage, "input_tokens", 0)
+    output = Map.get(usage, "output_tokens", 0)
+    total = Map.get(usage, "total_tokens", input + output)
+    duration = Map.get(result_data, :duration_ms)
+    cost = Map.get(result_data, :cost)
+    result_event = Map.get(result_data, :result, :unknown)
+
+    cost_str = if is_map(cost), do: " cost=$#{Map.get(cost, "total", "?")}", else: ""
+    duration_str = if is_integer(duration), do: " duration=#{div(duration, 1000)}s", else: ""
+
+    Logger.info(
+      "Claude session completed for #{issue_context(issue)} session_id=#{session_id} " <>
+        "result=#{result_event} tokens=#{total} (in=#{input} out=#{output})#{duration_str}#{cost_str}"
+    )
+
+    # Log a summary of what Claude produced
+    result_text = Map.get(result_data, :result_text, "")
+
+    if is_binary(result_text) and result_text != "" do
+      summary = result_text |> String.trim() |> String.slice(0, 500)
+      Logger.info("Claude result summary for session_id=#{session_id}: #{summary}")
+    end
+  end
 
   defp validate_workspace(workspace) when is_binary(workspace) do
     expanded = Path.expand(workspace)

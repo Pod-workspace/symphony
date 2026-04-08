@@ -1285,53 +1285,60 @@ defmodule SymphonyElixir.StatusDashboard do
   defp humanize_codex_event(:turn_cancelled, _message, _payload), do: "turn cancelled"
   defp humanize_codex_event(:malformed, _message, _payload), do: "malformed JSON event from agent"
 
-  defp humanize_codex_event(:notification, _message, payload) do
-    humanize_claude_stream_event(payload)
+  defp humanize_codex_event(:notification, message, payload) do
+    humanize_claude_event(payload) || humanize_claude_event_from_message(message)
   end
 
   defp humanize_codex_event(_event, _message, _payload), do: nil
 
   # Claude Code stream-json event humanization
+  # Events are: assistant (with message.content), user (tool results), system
 
-  defp humanize_claude_stream_event(%{"type" => "stream_event", "event" => event}) do
-    humanize_claude_api_event(event)
+  defp humanize_claude_event(%{"type" => "assistant", "_symphony_summary" => summary})
+       when is_binary(summary) and summary != "" do
+    summary
   end
 
-  defp humanize_claude_stream_event(%{"type" => "system", "subtype" => "api_retry"} = payload) do
+  defp humanize_claude_event(%{"type" => "assistant", "message" => %{"content" => content}})
+       when is_list(content) do
+    Enum.find_value(content, fn
+      %{"type" => "tool_use", "name" => name} -> "using tool: #{name}"
+      %{"type" => "text", "text" => text} when is_binary(text) ->
+        trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, 120)
+        if trimmed != "", do: "writing: #{trimmed}"
+      %{"type" => "thinking"} -> "thinking..."
+      _ -> nil
+    end) || "assistant responding..."
+  end
+
+  defp humanize_claude_event(%{"type" => "assistant"}) do
+    "assistant responding..."
+  end
+
+  defp humanize_claude_event(%{"type" => "user"}) do
+    "tool result received"
+  end
+
+  defp humanize_claude_event(%{"type" => "system", "subtype" => "api_retry"} = payload) do
     "API retry attempt #{Map.get(payload, "attempt", "?")} (#{Map.get(payload, "error", "unknown")})"
   end
 
-  defp humanize_claude_stream_event(_payload), do: nil
-
-  defp humanize_claude_api_event(%{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}})
-       when is_binary(text) do
-    trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim()
-    if trimmed != "", do: "writing: #{trimmed}", else: nil
+  defp humanize_claude_event(%{"type" => "system", "subtype" => subtype}) when is_binary(subtype) do
+    subtype
   end
 
-  defp humanize_claude_api_event(%{"type" => "content_block_delta", "delta" => %{"type" => "thinking_delta"}}) do
-    "thinking..."
+  defp humanize_claude_event(%{"type" => type}) when is_binary(type), do: type
+  defp humanize_claude_event(_payload), do: nil
+
+  defp humanize_claude_event_from_message(message) when is_map(message) do
+    # Check for assistant_summary passed from the adapter
+    case Map.get(message, :assistant_summary) || Map.get(message, "assistant_summary") do
+      summary when is_binary(summary) and summary != "" -> summary
+      _ -> nil
+    end
   end
 
-  defp humanize_claude_api_event(%{"type" => "content_block_start", "content_block" => %{"type" => "tool_use", "name" => name}})
-       when is_binary(name) do
-    "using tool: #{name}"
-  end
-
-  defp humanize_claude_api_event(%{"type" => "content_block_start", "content_block" => %{"type" => "thinking"}}) do
-    "thinking..."
-  end
-
-  defp humanize_claude_api_event(%{"type" => "message_start"}) do
-    "message started"
-  end
-
-  defp humanize_claude_api_event(%{"type" => "message_delta", "delta" => %{"stop_reason" => reason}})
-       when is_binary(reason) do
-    "turn ending: #{reason}"
-  end
-
-  defp humanize_claude_api_event(_event), do: nil
+  defp humanize_claude_event_from_message(_message), do: nil
 
   defp unwrap_codex_message_payload(%{} = message) do
     cond do
