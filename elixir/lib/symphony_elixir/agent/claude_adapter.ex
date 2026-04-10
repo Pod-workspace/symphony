@@ -370,13 +370,20 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
   defp summarize_assistant_content(_content), do: nil
 
   defp ensure_total_tokens(usage) when is_map(usage) do
-    if is_nil(Map.get(usage, "total_tokens")) do
-      input = Map.get(usage, "input_tokens", 0)
-      output = Map.get(usage, "output_tokens", 0)
-      Map.put(usage, "total_tokens", input + output)
-    else
-      usage
-    end
+    # Claude reports cache tokens separately; fold them into input_tokens
+    # so the orchestrator's delta tracker sees the full picture.
+    cache_creation = Map.get(usage, "cache_creation_input_tokens", 0) || 0
+    cache_read = Map.get(usage, "cache_read_input_tokens", 0) || 0
+    raw_input = Map.get(usage, "input_tokens", 0) || 0
+    output = Map.get(usage, "output_tokens", 0) || 0
+
+    full_input = raw_input + cache_creation + cache_read
+    total = full_input + output
+
+    usage
+    |> Map.put("input_tokens", full_input)
+    |> Map.put("output_tokens", output)
+    |> Map.put("total_tokens", total)
   end
 
   defp ensure_total_tokens(usage), do: usage

@@ -47,8 +47,11 @@ defmodule SymphonyElixir.Notion.Client do
 
       _ ->
         with :ok <- validate_tracker_config(),
-             {:ok, assignee_filter} <- routing_assignee_filter() do
-          fetch_pages_by_ids(ids, assignee_filter, false)
+             {:ok, assignee_filter} <- routing_assignee_filter(),
+             {:ok, issues} <- fetch_pages_by_ids(ids, assignee_filter, false) do
+          # Hydrate blockers so revalidation can check if Todo issues
+          # are still blocked or if their blockers have reached terminal state.
+          hydrate_blocker_metadata(issues)
         end
     end
   end

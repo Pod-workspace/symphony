@@ -608,6 +608,84 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
   end
 
+  test "dispatch revalidation unblocks todo issue when all blockers reach terminal state" do
+    stale_issue = %Issue{
+      id: "unblocked-1",
+      identifier: "MT-2001",
+      title: "Was blocked, now free",
+      state: "Todo",
+      blocked_by: []
+    }
+
+    # The fetcher returns the issue with a blocker that has reached terminal state
+    refreshed_issue = %Issue{
+      id: "unblocked-1",
+      identifier: "MT-2001",
+      title: "Was blocked, now free",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-done", identifier: "MT-2002", state: "Done"}]
+    }
+
+    fetcher = fn ["unblocked-1"] -> {:ok, [refreshed_issue]} end
+
+    assert {:ok, %Issue{} = dispatched_issue} =
+             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+
+    assert dispatched_issue.identifier == "MT-2001"
+  end
+
+  test "dispatch revalidation blocks todo issue when blocker state is nil (unhydrated)" do
+    stale_issue = %Issue{
+      id: "nil-blocker-1",
+      identifier: "MT-2003",
+      title: "Blocker not hydrated",
+      state: "Todo",
+      blocked_by: []
+    }
+
+    # Simulates what happens when blockers are fetched without hydration:
+    # the relation ID is present but state is nil
+    refreshed_issue = %Issue{
+      id: "nil-blocker-1",
+      identifier: "MT-2003",
+      title: "Blocker not hydrated",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-unknown", identifier: nil, state: nil}]
+    }
+
+    fetcher = fn ["nil-blocker-1"] -> {:ok, [refreshed_issue]} end
+
+    assert {:skip, %Issue{}} =
+             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+  end
+
+  test "dispatch revalidation unblocks todo issue with mix of terminal and nil blockers when all known blockers are terminal" do
+    stale_issue = %Issue{
+      id: "mixed-1",
+      identifier: "MT-2005",
+      title: "Mixed blockers",
+      state: "Todo",
+      blocked_by: []
+    }
+
+    # One blocker is Done (terminal), one has nil state (unhydrated) — nil is conservative-blocked
+    refreshed_issue = %Issue{
+      id: "mixed-1",
+      identifier: "MT-2005",
+      title: "Mixed blockers",
+      state: "Todo",
+      blocked_by: [
+        %{id: "b-done", identifier: "MT-2006", state: "Done"},
+        %{id: "b-nil", identifier: nil, state: nil}
+      ]
+    }
+
+    fetcher = fn ["mixed-1"] -> {:ok, [refreshed_issue]} end
+
+    assert {:skip, %Issue{}} =
+             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+  end
+
   test "workspace remove returns error information for missing directory" do
     random_path =
       Path.join(
