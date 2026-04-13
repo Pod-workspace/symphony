@@ -1197,4 +1197,75 @@ defmodule SymphonyElixir.AppServerTest do
       File.rm_rf(test_root)
     end
   end
+
+  test "app server suppresses noisy streaming notification logs" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-notification-filter-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-93")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-93"}}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-93"}}}'
+            printf '%s\\n' '{"method":"item/agentMessage/delta","params":{"delta":"hello"}}'
+            printf '%s\\n' '{"method":"item/commandExecution/outputDelta","params":{"outputDelta":"ok"}}'
+            printf '%s\\n' '{"method":"turn/diff/updated","params":{"diff":"line1\\nline2"}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-notification-filter",
+        identifier: "MT-93",
+        title: "Filter notification logs",
+        description: "Ensure low-signal streaming notifications are omitted from debug logs",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-93",
+        labels: ["backend"]
+      }
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert {:ok, _result} = AppServer.run(workspace, "Filter notification logs", issue)
+        end)
+
+      refute log =~ ~s(Codex notification: "item/agentMessage/delta")
+      refute log =~ ~s(Codex notification: "item/commandExecution/outputDelta")
+      assert log =~ ~s(Codex notification: "turn/diff/updated")
+    after
+      File.rm_rf(test_root)
+    end
+  end
 end

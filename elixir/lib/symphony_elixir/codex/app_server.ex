@@ -12,6 +12,15 @@ defmodule SymphonyElixir.Codex.AppServer do
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
   @non_interactive_tool_input_answer "This is a non-interactive session. Operator input is unavailable."
+  @suppressed_notification_methods [
+    "item/agentMessage/delta",
+    "item/plan/delta",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/summaryPartAdded",
+    "item/reasoning/textDelta",
+    "item/commandExecution/outputDelta",
+    "item/fileChange/outputDelta"
+  ]
 
   @type session :: %{
           port: port(),
@@ -474,7 +483,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             metadata
           )
 
-          Logger.debug("Codex notification: #{inspect(method)}")
+          maybe_log_notification(method)
           receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
         end
     end
@@ -894,6 +903,14 @@ defmodule SymphonyElixir.Codex.AppServer do
       end
     end
   end
+
+  defp maybe_log_notification(method) when is_binary(method) do
+    unless method in @suppressed_notification_methods do
+      Logger.debug("Codex notification: #{inspect(method)}")
+    end
+  end
+
+  defp maybe_log_notification(_method), do: :ok
 
   defp issue_context(%{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
