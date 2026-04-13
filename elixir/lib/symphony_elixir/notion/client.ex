@@ -825,7 +825,21 @@ defmodule SymphonyElixir.Notion.Client do
   end
 
   defp workpad_section_regex(heading) do
-    ~r/## #{Regex.escape(heading)}\n\n#{Regex.escape(@workpad_marker_begin)}\n.*?\n#{Regex.escape(@workpad_marker_end)}/s
+    # Notion's markdown API backslash-escapes angle brackets in HTML comments,
+    # returning \<!-- ... --\> instead of <!-- ... -->. Match both forms so we
+    # find the existing workpad section instead of appending a duplicate.
+    esc_heading = Regex.escape(heading)
+    begin_pat = marker_pattern(@workpad_marker_begin)
+    end_pat = marker_pattern(@workpad_marker_end)
+
+    Regex.compile!("## #{esc_heading}\n\n#{begin_pat}\n.*?\n#{end_pat}", "s")
+  end
+
+  defp marker_pattern(marker) do
+    marker
+    |> Regex.escape()
+    |> String.replace("<", "\\\\?<")
+    |> String.replace(">", "\\\\?>")
   end
 
   defp workpad_heading do

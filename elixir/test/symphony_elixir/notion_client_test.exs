@@ -192,4 +192,66 @@ defmodule SymphonyElixir.NotionClientTest do
     assert Client.extract_workpad_section_for_test(markdown, "Codex Workpad") == section
     assert Client.strip_workpad_for_test(markdown) == "Body text."
   end
+
+  test "normalize_page strips workpad section with notion-escaped angle brackets" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_data_source_id: "data-source",
+      tracker_notion: %{
+        properties: %{
+          title: "Task",
+          state: "Workflow State",
+          id_number: "Sequence",
+          assignee: "Assignee"
+        },
+        identifier: %{prefix: "GEN"},
+        state_map: %{"In Progress" => "Doing"},
+        priority_map: %{}
+      }
+    )
+
+    markdown =
+      "Ticket details.\n\n## Codex Workpad\n\n\\<!-- SYMPHONY:WORKPAD:BEGIN --\\>\nInternal notes.\n\\<!-- SYMPHONY:WORKPAD:END --\\>"
+
+    page = %{
+      "id" => "page-1",
+      "url" => "https://notion.so/page-1",
+      "created_time" => "2026-01-01T00:00:00.000Z",
+      "last_edited_time" => "2026-01-02T00:00:00.000Z",
+      "properties" => %{
+        "Task" => %{"type" => "title", "title" => [%{"plain_text" => "Test"}]},
+        "Workflow State" => %{"type" => "status", "status" => %{"name" => "Doing"}},
+        "Sequence" => %{"type" => "number", "number" => 1},
+        "Assignee" => %{"type" => "people", "people" => []}
+      }
+    }
+
+    issue = Client.normalize_page_for_test(page, description: markdown)
+    assert issue.description == "Ticket details."
+  end
+
+  test "workpad helpers handle notion escaped angle brackets in HTML comments" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    # Notion's markdown API backslash-escapes angle brackets in HTML comments.
+    # The regex must match \<!-- ... --\> so sync_workpad finds the existing
+    # section instead of appending a duplicate.
+    escaped_section =
+      "## Codex Workpad\n\n\\<!-- SYMPHONY:WORKPAD:BEGIN --\\>\nProgress update.\n\\<!-- SYMPHONY:WORKPAD:END --\\>"
+
+    markdown = """
+    Body text.
+
+    #{escaped_section}
+    """
+
+    assert Client.extract_workpad_section_for_test(markdown, "Codex Workpad") == escaped_section
+    assert Client.strip_workpad_for_test(markdown) == "Body text."
+  end
 end
