@@ -33,9 +33,10 @@ The state machine lives in `WORKFLOW.md` — a markdown file with YAML frontmatt
 2. Install skills: `npx skills add odysseus0/symphony -a codex -s linear land commit push pull debug --copy -y` and copy `elixir/WORKFLOW.md` to your repo
 3. In WORKFLOW.md, set `tracker.project_slug` and `hooks.after_create` (clone your repo + setup commands)
 4. Add **Rework**, **Human Review**, **Merging** as custom states in Linear (Team Settings → Workflow)
-5. Commit, push, then: `mise exec -- ./bin/symphony /path/to/your-repo/WORKFLOW.md`
-   - Add `--port 4003` to enable the dashboard, and `--host 0.0.0.0` if it needs to be reachable
-     off-host.
+5. Commit, push, then either `mise exec -- ./bin/symphony /path/to/your-repo/WORKFLOW.md` or
+   `cd elixir && mise exec -- make hot WORKFLOW=/path/to/your-repo/WORKFLOW.md`.
+   Add `--port 4003 --host 0.0.0.0` to `./bin/symphony`, or `PORT=4003 HOST=0.0.0.0` to
+   `make hot`, if the dashboard needs to be reachable off-host.
 
 **[Getting Started with OpenAI Symphony](https://x.com/odysseus0z/status/2031850264240800131)** — full walkthrough with context on why these defaults matter.
 

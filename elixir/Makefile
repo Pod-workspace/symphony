@@ -1,9 +1,9 @@
-.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e
+.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e hot
 
 MIX ?= mix
 
 help:
-	@echo "Targets: setup, deps, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
+	@echo "Targets: setup, deps, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, hot, ci"
 
 setup:
 	$(MIX) setup
@@ -45,6 +45,14 @@ e2e:
 		exit 1; \
 	fi
 	SYMPHONY_RUN_LIVE_E2E=1 $(MIX) test test/symphony_elixir/live_e2e_test.exs
+
+hot:
+	SYMPHONY_WORKFLOW="$(WORKFLOW)" \
+	SYMPHONY_LOGS_ROOT="$(LOGS_ROOT)" \
+	SYMPHONY_SERVER_PORT="$(PORT)" \
+	SYMPHONY_SERVER_HOST="$(HOST)" \
+	SYMPHONY_RELOAD_INTERVAL_MS="$(RELOAD_INTERVAL_MS)" \
+	MIX_ENV=prod $(MIX) symphony.hot
 
 ci:
 	$(MAKE) setup

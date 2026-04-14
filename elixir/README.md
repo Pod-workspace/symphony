@@ -65,6 +65,37 @@ mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
 
+## Hot reload run
+
+For long-running `MIX_ENV=prod` development runs where you want code changes to
+land without killing active agents, use the hot reload task instead of the
+escript:
+
+```bash
+cd symphony/elixir
+mise exec -- make hot WORKFLOW=/path/to/WORKFLOW.md PORT=4003
+```
+
+What reloads in place:
+
+- `lib/**/*.ex` is hot recompiled into the running BEAM node
+- `WORKFLOW.md` continues to reload automatically through `WorkflowStore`
+
+What still needs a cold restart:
+
+- environment changes
+- `config/*.exs`
+- `mix.exs`
+- `mix.lock`
+
+Optional make variables:
+
+- `WORKFLOW` overrides the workflow path (defaults to `./WORKFLOW.md`)
+- `LOGS_ROOT` overrides the log root
+- `PORT` enables the observability server
+- `HOST` overrides the observability bind host
+- `RELOAD_INTERVAL_MS` changes the polling interval for source reloads
+
 ## Configuration
 
 Pass a custom workflow file path to `./bin/symphony` when starting the service:
