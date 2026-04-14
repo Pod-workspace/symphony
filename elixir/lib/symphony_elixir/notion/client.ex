@@ -70,7 +70,11 @@ defmodule SymphonyElixir.Notion.Client do
       if status in 200..299 do
         {:ok, response_body}
       else
-        Logger.error("Notion API request failed status=#{status}" <> notion_error_context(method, path, response))
+        Logger.error(
+          "Notion API request failed status=#{status}" <>
+            notion_error_context(method, path, response)
+        )
+
         {:error, {:notion_api_status, status, response_body}}
       end
     else
@@ -111,7 +115,11 @@ defmodule SymphonyElixir.Notion.Client do
            request(
              :patch,
              "/pages/#{page_id}",
-             body: %{"properties" => %{property_name => build_property_update(property_type, notion_state)}}
+             body: %{
+               "properties" => %{
+                 property_name => build_property_update(property_type, notion_state)
+               }
+             }
            ),
          "page" <- response["object"] do
       :ok
@@ -122,13 +130,27 @@ defmodule SymphonyElixir.Notion.Client do
   end
 
   @spec sync_workpad(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def sync_workpad(page_id, body) when is_binary(page_id) and is_binary(body) do
-    with {:ok, page} <- retrieve_page(page_id),
-         {:ok, markdown} <- retrieve_page_markdown(page_id),
+  @spec sync_workpad(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def sync_workpad(page_id, body, opts \\ [])
+      when is_binary(page_id) and is_binary(body) and is_list(opts) do
+    request_fun = Keyword.get(opts, :request_fun, &request/3)
+
+    with {:ok, page} <- retrieve_page(page_id, request_fun),
+         {:ok, markdown} <- retrieve_page_markdown(page_id, request_fun),
          heading <- workpad_heading(),
-         existing_section <- extract_workpad_section(markdown, heading),
+         existing_sections <- extract_workpad_sections(markdown, heading),
+         normalized_body <- String.trim(body),
          new_section <- build_workpad_section(body, heading),
-         {:ok, _response} <- apply_workpad_update(page_id, markdown, existing_section, new_section) do
+         {:ok, _response} <-
+           apply_workpad_update(
+             page_id,
+             markdown,
+             existing_sections,
+             normalized_body,
+             new_section,
+             request_fun,
+             heading
+           ) do
       {:ok,
        %{
          "data" => %{
@@ -194,7 +216,14 @@ defmodule SymphonyElixir.Notion.Client do
     end
   end
 
-  defp do_query_data_source_pages(filter, properties, assignee_filter, include_markdown?, start_cursor, acc) do
+  defp do_query_data_source_pages(
+         filter,
+         properties,
+         assignee_filter,
+         include_markdown?,
+         start_cursor,
+         acc
+       ) do
     payload =
       %{
         "page_size" => @page_size,
@@ -209,8 +238,18 @@ defmodule SymphonyElixir.Notion.Client do
       updated_acc = acc ++ issues
 
       case next_cursor do
-        nil -> {:ok, updated_acc}
-        cursor -> do_query_data_source_pages(filter, properties, assignee_filter, include_markdown?, cursor, updated_acc)
+        nil ->
+          {:ok, updated_acc}
+
+        cursor ->
+          do_query_data_source_pages(
+            filter,
+            properties,
+            assignee_filter,
+            include_markdown?,
+            cursor,
+            updated_acc
+          )
       end
     end
   end
@@ -271,7 +310,10 @@ defmodule SymphonyElixir.Notion.Client do
            hydrated_blockers =
              Enum.map(blocked_by, fn blocker ->
                blocker
-               |> Map.put(:identifier, get_in(blocker_index, [blocker.id, :identifier]) || blocker.identifier)
+               |> Map.put(
+                 :identifier,
+                 get_in(blocker_index, [blocker.id, :identifier]) || blocker.identifier
+               )
                |> Map.put(:state, get_in(blocker_index, [blocker.id, :state]) || blocker.state)
              end)
 
@@ -282,6 +324,7 @@ defmodule SymphonyElixir.Notion.Client do
         # Hydration failed; keep issues with unhydrated blockers.
         # The orchestrator treats nil-state blockers as blocking (conservative).
         Logger.warning("Blocker hydration failed; unhydrated blockers will be treated as blocking")
+
         {:ok, issues}
     end
   end
@@ -319,10 +362,13 @@ defmodule SymphonyElixir.Notion.Client do
     request(:get, "/data_sources/#{Config.settings!().tracker.data_source_id}")
   end
 
-  defp retrieve_page(page_id), do: request(:get, "/pages/#{page_id}")
+  defp retrieve_page(page_id), do: retrieve_page(page_id, &request/3)
+  defp retrieve_page(page_id, request_fun), do: request_fun.(:get, "/pages/#{page_id}", [])
 
-  defp retrieve_page_markdown(page_id) do
-    with {:ok, response} <- request(:get, "/pages/#{page_id}/markdown"),
+  defp retrieve_page_markdown(page_id), do: retrieve_page_markdown(page_id, &request/3)
+
+  defp retrieve_page_markdown(page_id, request_fun) do
+    with {:ok, response} <- request_fun.(:get, "/pages/#{page_id}/markdown", []),
          markdown when is_binary(markdown) <- response["markdown"] do
       {:ok, markdown}
     else
@@ -331,14 +377,59 @@ defmodule SymphonyElixir.Notion.Client do
     end
   end
 
-  defp apply_workpad_update(page_id, markdown, nil, new_section) do
-    content =
-      case String.trim(markdown) do
-        "" -> new_section
-        _ -> String.trim_trailing(markdown) <> "\n\n" <> new_section
-      end
+  defp apply_workpad_update(
+         page_id,
+         markdown,
+         [],
+         _normalized_body,
+         new_section,
+         request_fun,
+         _heading
+       ) do
+    replace_workpad_content(
+      page_id,
+      canonical_workpad_content(markdown, new_section),
+      request_fun
+    )
+  end
 
-    request(
+  defp apply_workpad_update(
+         page_id,
+         _markdown,
+         [existing_section],
+         normalized_body,
+         new_section,
+         request_fun,
+         heading
+       ) do
+    if workpad_section_matches_body?(existing_section, normalized_body, heading) do
+      {:ok, %{"object" => "page_markdown"}}
+    else
+      update_workpad_section(page_id, existing_section, new_section, request_fun)
+    end
+  end
+
+  defp apply_workpad_update(
+         page_id,
+         markdown,
+         existing_sections,
+         _normalized_body,
+         new_section,
+         request_fun,
+         _heading
+       )
+       when is_list(existing_sections) do
+    Logger.warning("Notion workpad sync found #{length(existing_sections)} managed sections on page #{page_id}; rewriting content to deduplicate")
+
+    replace_workpad_content(
+      page_id,
+      canonical_workpad_content(markdown, new_section),
+      request_fun
+    )
+  end
+
+  defp replace_workpad_content(page_id, content, request_fun) do
+    request_fun.(
       :patch,
       "/pages/#{page_id}/markdown",
       body: %{
@@ -348,26 +439,22 @@ defmodule SymphonyElixir.Notion.Client do
     )
   end
 
-  defp apply_workpad_update(page_id, _markdown, existing_section, new_section) do
-    if existing_section == new_section do
-      {:ok, %{"object" => "page_markdown"}}
-    else
-      request(
-        :patch,
-        "/pages/#{page_id}/markdown",
-        body: %{
-          "type" => "update_content",
-          "update_content" => %{
-            "content_updates" => [
-              %{
-                "old_str" => existing_section,
-                "new_str" => new_section
-              }
-            ]
-          }
+  defp update_workpad_section(page_id, existing_section, new_section, request_fun) do
+    request_fun.(
+      :patch,
+      "/pages/#{page_id}/markdown",
+      body: %{
+        "type" => "update_content",
+        "update_content" => %{
+          "content_updates" => [
+            %{
+              "old_str" => existing_section,
+              "new_str" => new_section
+            }
+          ]
         }
-      )
-    end
+      }
+    )
   end
 
   defp request_headers do
@@ -436,7 +523,11 @@ defmodule SymphonyElixir.Notion.Client do
     end
   end
 
-  defp decode_query_response(%{"results" => results, "has_more" => has_more, "next_cursor" => next_cursor})
+  defp decode_query_response(%{
+         "results" => results,
+         "has_more" => has_more,
+         "next_cursor" => next_cursor
+       })
        when is_list(results) do
     {:ok, results, if(has_more == true, do: next_cursor, else: nil)}
   end
@@ -621,8 +712,11 @@ defmodule SymphonyElixir.Notion.Client do
 
       "me" ->
         case request(:get, "/users/me") do
-          {:ok, user} -> {:ok, %{configured_assignee: assignee, match_values: user_match_values(user)}}
-          {:error, reason} -> {:error, reason}
+          {:ok, user} ->
+            {:ok, %{configured_assignee: assignee, match_values: user_match_values(user)}}
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       normalized ->
@@ -758,12 +852,20 @@ defmodule SymphonyElixir.Notion.Client do
   defp build_property_update("select", value), do: %{"select" => %{"name" => value}}
   defp build_property_update(_type, value), do: %{"status" => %{"name" => value}}
 
-  defp property_option_name(%{"type" => "status", "status" => %{"name" => name}}) when is_binary(name), do: name
-  defp property_option_name(%{"type" => "select", "select" => %{"name" => name}}) when is_binary(name), do: name
+  defp property_option_name(%{"type" => "status", "status" => %{"name" => name}})
+       when is_binary(name), do: name
+
+  defp property_option_name(%{"type" => "select", "select" => %{"name" => name}})
+       when is_binary(name), do: name
+
   defp property_option_name(_property), do: nil
 
-  defp plain_text_value(%{"type" => "title", "title" => values}) when is_list(values), do: join_rich_text(values)
-  defp plain_text_value(%{"type" => "rich_text", "rich_text" => values}) when is_list(values), do: join_rich_text(values)
+  defp plain_text_value(%{"type" => "title", "title" => values}) when is_list(values),
+    do: join_rich_text(values)
+
+  defp plain_text_value(%{"type" => "rich_text", "rich_text" => values}) when is_list(values),
+    do: join_rich_text(values)
+
   defp plain_text_value(_value), do: nil
 
   defp join_rich_text(values) when is_list(values) do
@@ -796,11 +898,22 @@ defmodule SymphonyElixir.Notion.Client do
     heading = workpad_heading()
 
     markdown
-    |> then(&Regex.replace(workpad_section_regex(heading), &1, ""))
+    |> then(&Regex.split(workpad_section_regex(heading), &1, trim: true))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
     |> String.trim()
     |> case do
       "" -> nil
       stripped -> stripped
+    end
+  end
+
+  defp canonical_workpad_content(markdown, new_section)
+       when is_binary(markdown) and is_binary(new_section) do
+    case strip_workpad(markdown) do
+      nil -> new_section
+      stripped -> String.trim_trailing(stripped) <> "\n\n" <> new_section
     end
   end
 
@@ -809,7 +922,6 @@ defmodule SymphonyElixir.Notion.Client do
 
     """
     ## #{heading}
-
     #{@workpad_marker_begin}
     #{normalized_body}
     #{@workpad_marker_end}
@@ -817,9 +929,31 @@ defmodule SymphonyElixir.Notion.Client do
     |> String.trim()
   end
 
-  defp extract_workpad_section(markdown, heading) when is_binary(markdown) and is_binary(heading) do
-    case Regex.run(workpad_section_regex(heading), markdown) do
-      [section] -> section
+  defp extract_workpad_section(markdown, heading)
+       when is_binary(markdown) and is_binary(heading) do
+    markdown
+    |> extract_workpad_sections(heading)
+    |> List.first()
+  end
+
+  defp extract_workpad_sections(markdown, heading)
+       when is_binary(markdown) and is_binary(heading) do
+    workpad_section_regex(heading)
+    |> Regex.scan(markdown)
+    |> Enum.map(fn [section] -> section end)
+  end
+
+  defp workpad_section_matches_body?(section, body, heading)
+       when is_binary(section) and is_binary(body) and is_binary(heading) do
+    case extract_workpad_body(section, heading) do
+      ^body -> true
+      _ -> false
+    end
+  end
+
+  defp extract_workpad_body(section, heading) when is_binary(section) and is_binary(heading) do
+    case Regex.run(workpad_body_regex(heading), section) do
+      [_, body] -> String.trim(body)
       _ -> nil
     end
   end
@@ -832,7 +966,15 @@ defmodule SymphonyElixir.Notion.Client do
     begin_pat = marker_pattern(@workpad_marker_begin)
     end_pat = marker_pattern(@workpad_marker_end)
 
-    Regex.compile!("## #{esc_heading}\n\n#{begin_pat}\n.*?\n#{end_pat}", "s")
+    Regex.compile!("## #{esc_heading}\n+#{begin_pat}\n.*?\n#{end_pat}", "s")
+  end
+
+  defp workpad_body_regex(heading) do
+    esc_heading = Regex.escape(heading)
+    begin_pat = marker_pattern(@workpad_marker_begin)
+    end_pat = marker_pattern(@workpad_marker_end)
+
+    Regex.compile!("## #{esc_heading}\n+#{begin_pat}\n(.*?)\n#{end_pat}", "s")
   end
 
   defp marker_pattern(marker) do

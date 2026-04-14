@@ -42,7 +42,11 @@ defmodule SymphonyElixir.NotionClientTest do
     )
 
     assert {:error, :invalid_notion_method} =
-             Client.request("TRACE", "/pages/page-1", request_fun: fn _opts -> flunk("request should not be executed for invalid methods") end)
+             Client.request("TRACE", "/pages/page-1",
+               request_fun: fn _opts ->
+                 flunk("request should not be executed for invalid methods")
+               end
+             )
 
     assert {:error, :missing_notion_api_token} =
              Client.request("GET", "/pages/page-1", request_fun: fn _opts -> flunk("request should not be executed without auth") end)
@@ -61,7 +65,10 @@ defmodule SymphonyElixir.NotionClientTest do
 
     assert {:ok, %{"object" => "list"}} =
              Client.request("POST", "/data_sources/data-source/query",
-               query: [{"filter_properties[]", "Title"}, {"filter_properties[]", "Symphony Status"}],
+               query: [
+                 {"filter_properties[]", "Title"},
+                 {"filter_properties[]", "Symphony Status"}
+               ],
                body: %{"page_size" => 1},
                request_fun: fn opts ->
                  send(test_pid, {:request_opts, opts})
@@ -70,7 +77,12 @@ defmodule SymphonyElixir.NotionClientTest do
              )
 
     assert_received {:request_opts, opts}
-    assert opts[:params] == [{"filter_properties[]", "Title"}, {"filter_properties[]", "Symphony Status"}]
+
+    assert opts[:params] == [
+             {"filter_properties[]", "Title"},
+             {"filter_properties[]", "Symphony Status"}
+           ]
+
     assert opts[:json] == %{"page_size" => 1}
   end
 
@@ -253,5 +265,136 @@ defmodule SymphonyElixir.NotionClientTest do
 
     assert Client.extract_workpad_section_for_test(markdown, "Codex Workpad") == escaped_section
     assert Client.strip_workpad_for_test(markdown) == "Body text."
+  end
+
+  test "workpad helpers handle notion markdown without a blank line after the heading" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    normalized_section =
+      "## Codex Workpad\n\\<!-- SYMPHONY:WORKPAD:BEGIN --\\>\nProgress update.\n\\<!-- SYMPHONY:WORKPAD:END --\\>"
+
+    markdown = """
+    Body text.
+
+    #{normalized_section}
+    """
+
+    assert Client.extract_workpad_section_for_test(markdown, "Codex Workpad") == normalized_section
+    assert Client.strip_workpad_for_test(markdown) == "Body text."
+  end
+
+  test "sync_workpad treats notion-normalized markdown as already up to date" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    markdown = """
+    ## Codex Workpad
+    \\<!-- SYMPHONY:WORKPAD:BEGIN --\\>
+    Fresh notes.
+    \\<!-- SYMPHONY:WORKPAD:END --\\>
+    """
+
+    assert {:ok,
+            %{
+              "data" => %{
+                "syncWorkpad" => %{
+                  "id" => "page-1",
+                  "url" => "https://notion.so/page-1",
+                  "heading" => "Codex Workpad"
+                }
+              }
+            }} =
+             Client.sync_workpad("page-1", "Fresh notes.",
+               request_fun: fn
+                 :get, "/pages/page-1", [] ->
+                   {:ok, %{"id" => "page-1", "url" => "https://notion.so/page-1"}}
+
+                 :get, "/pages/page-1/markdown", [] ->
+                   {:ok, %{"markdown" => String.trim(markdown)}}
+
+                 :patch, "/pages/page-1/markdown", _opts ->
+                   flunk("sync_workpad should not patch when the normalized workpad already matches")
+               end
+             )
+  end
+
+  test "sync_workpad deduplicates managed sections even when the first section already matches" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil
+    )
+
+    test_pid = self()
+    fresh_section = Client.build_workpad_section_for_test("Fresh notes.", "Codex Workpad")
+
+    escaped_stale_section =
+      "## Codex Workpad\n\n\\<!-- SYMPHONY:WORKPAD:BEGIN --\\>\nStale notes.\n\\<!-- SYMPHONY:WORKPAD:END --\\>"
+
+    markdown = """
+    Ticket details.
+
+    #{fresh_section}
+
+    Supporting context.
+
+    #{escaped_stale_section}
+    """
+
+    log =
+      capture_log(fn ->
+        assert {:ok,
+                %{
+                  "data" => %{
+                    "syncWorkpad" => %{
+                      "id" => "page-1",
+                      "url" => "https://notion.so/page-1",
+                      "heading" => "Codex Workpad"
+                    }
+                  }
+                }} =
+                 Client.sync_workpad("page-1", "Fresh notes.",
+                   request_fun: fn
+                     :get, "/pages/page-1", [] ->
+                       {:ok, %{"id" => "page-1", "url" => "https://notion.so/page-1"}}
+
+                     :get, "/pages/page-1/markdown", [] ->
+                       {:ok, %{"markdown" => markdown}}
+
+                     :patch, "/pages/page-1/markdown", opts ->
+                       send(test_pid, {:patch_markdown, opts})
+                       {:ok, %{"object" => "page_markdown"}}
+                   end
+                 )
+      end)
+
+    assert log =~ "Notion workpad sync found 2 managed sections on page page-1"
+
+    assert_received {:patch_markdown, opts}
+
+    assert opts[:body] == %{
+             "type" => "replace_content",
+             "replace_content" => %{
+               "new_str" =>
+                 """
+                 Ticket details.
+
+                 Supporting context.
+
+                 ## Codex Workpad
+                 <!-- SYMPHONY:WORKPAD:BEGIN -->
+                 Fresh notes.
+                 <!-- SYMPHONY:WORKPAD:END -->
+                 """
+                 |> String.trim()
+             }
+           }
   end
 end
