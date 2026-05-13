@@ -3,9 +3,14 @@ defmodule SymphonyElixir.AgentRunner do
   Executes a single issue in its workspace using the configured coding agent.
   """
 
+  import Bitwise, only: [<<<: 2]
   require Logger
   alias SymphonyElixir.Agent.Adapter
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+
+  @empty_turn_threshold_ms 5_000
+  @max_consecutive_empty_turns 3
+  @empty_turn_backoff_base_ms 2_000
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
@@ -62,14 +67,37 @@ defmodule SymphonyElixir.AgentRunner do
 
     with {:ok, session} <- adapter.start_session(workspace) do
       try do
-        do_run_codex_turns(adapter, session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, external_max_turns)
+        do_run_codex_turns(
+          adapter,
+          session,
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          issue_state_fetcher,
+          1,
+          external_max_turns,
+          0
+        )
       after
         adapter.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(adapter, app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_codex_turns(
+         adapter,
+         app_session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns,
+         consecutive_empty_turns
+       ) do
+    turn_started_at_ms = System.monotonic_time(:millisecond)
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
@@ -79,23 +107,39 @@ defmodule SymphonyElixir.AgentRunner do
              issue,
              on_message: codex_message_handler(codex_update_recipient, issue)
            ) do
-      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+      turn_elapsed_ms = System.monotonic_time(:millisecond) - turn_started_at_ms
+      empty_turn? = turn_elapsed_ms < @empty_turn_threshold_ms
+
+      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns} elapsed_ms=#{turn_elapsed_ms}")
 
       case continue_with_issue?(issue, issue_state_fetcher) do
         {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+          next_consecutive_empty_turns = if empty_turn?, do: consecutive_empty_turns + 1, else: 0
 
-          do_run_codex_turns(
-            adapter,
-            app_session,
-            workspace,
-            refreshed_issue,
-            codex_update_recipient,
-            opts,
-            issue_state_fetcher,
-            turn_number + 1,
-            max_turns
-          )
+          if next_consecutive_empty_turns >= @max_consecutive_empty_turns do
+            Logger.warning(
+              "Empty turn circuit breaker tripped for #{issue_context(refreshed_issue)} consecutive_empty_turns=#{next_consecutive_empty_turns} threshold_ms=#{@empty_turn_threshold_ms}; returning control to orchestrator"
+            )
+
+            :ok
+          else
+            maybe_backoff_after_empty_turn(refreshed_issue, turn_number, max_turns, next_consecutive_empty_turns)
+
+            Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+
+            do_run_codex_turns(
+              adapter,
+              app_session,
+              workspace,
+              refreshed_issue,
+              codex_update_recipient,
+              opts,
+              issue_state_fetcher,
+              turn_number + 1,
+              max_turns,
+              next_consecutive_empty_turns
+            )
+          end
 
         {:continue, refreshed_issue} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
@@ -109,6 +153,16 @@ defmodule SymphonyElixir.AgentRunner do
           {:error, reason}
       end
     end
+  end
+
+  defp maybe_backoff_after_empty_turn(_issue, _turn_number, _max_turns, 0), do: :ok
+
+  defp maybe_backoff_after_empty_turn(issue, turn_number, max_turns, consecutive_empty_turns) do
+    backoff_ms = @empty_turn_backoff_base_ms * (1 <<< min(consecutive_empty_turns - 1, 4))
+
+    Logger.info("Empty turn detected for #{issue_context(issue)} turn=#{turn_number}/#{max_turns} consecutive_empty_turns=#{consecutive_empty_turns}; backing off #{backoff_ms}ms")
+
+    Process.sleep(backoff_ms)
   end
 
   defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)

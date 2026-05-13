@@ -199,6 +199,98 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert is_integer(completed_state.codex_totals.seconds_running)
   end
 
+  test "orchestrator writes token usage deltas to separate JSONL log" do
+    issue_id = "issue-token-log"
+    log_file = Path.join(System.tmp_dir!(), "symphony-token-log-#{System.unique_integer([:positive])}.jsonl")
+    previous_log_file = Application.get_env(:symphony_elixir, :token_usage_log_file)
+
+    Application.put_env(:symphony_elixir, :token_usage_log_file, log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :token_usage_log_file)
+      else
+        Application.put_env(:symphony_elixir, :token_usage_log_file, previous_log_file)
+      end
+
+      File.rm(log_file)
+    end)
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-usage-log",
+      title: "Usage log test",
+      description: "Collect usage stats",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-usage-log"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TokenUsageLogOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-log-turn-log",
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "thread/tokenUsage/updated",
+           "params" => %{
+             "tokenUsage" => %{
+               "total" => %{"inputTokens" => 12, "outputTokens" => 4, "totalTokens" => 16}
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    _snapshot = GenServer.call(pid, :snapshot)
+
+    [line] = File.read!(log_file) |> String.split("\n", trim: true)
+    entry = Jason.decode!(line)
+
+    assert entry["issue_id"] == issue_id
+    assert entry["issue_identifier"] == "MT-usage-log"
+    assert entry["delta"] == %{"input_tokens" => 12, "output_tokens" => 4, "total_tokens" => 16}
+    assert entry["issue_totals"] == %{"input_tokens" => 12, "output_tokens" => 4, "total_tokens" => 16}
+    assert entry["runtime_totals"] == %{"input_tokens" => 12, "output_tokens" => 4, "total_tokens" => 16}
+  end
+
   test "orchestrator snapshot tracks turn completed usage when present" do
     issue_id = "issue-turn-completed-usage"
 
