@@ -100,7 +100,8 @@ defmodule SymphonyElixir.NotionClientTest do
           assignee: "Assignee",
           priority: "Priority",
           labels: "Labels",
-          blocked_by: "Blocked By"
+          blocked_by: "Blocked By",
+          children: "Tasks"
         },
         identifier: %{
           prefix: "GEN"
@@ -159,6 +160,10 @@ defmodule SymphonyElixir.NotionClientTest do
         "Blocked By" => %{
           "type" => "relation",
           "relation" => [%{"id" => "page-2"}]
+        },
+        "Tasks" => %{
+          "type" => "relation",
+          "relation" => [%{"id" => "page-1"}, %{"id" => "page-3"}]
         }
       }
     }
@@ -179,6 +184,12 @@ defmodule SymphonyElixir.NotionClientTest do
     assert issue.assigned_to_worker == true
     assert issue.labels == ["bug", "backend"]
     assert issue.blocked_by == [%{id: "page-2", identifier: nil, state: nil}]
+
+    assert issue.child_tasks == [
+             %{id: "page-1", identifier: nil, state: nil},
+             %{id: "page-3", identifier: nil, state: nil}
+           ]
+
     assert issue.created_at == ~U[2026-01-01 00:00:00.000Z]
     assert issue.updated_at == ~U[2026-01-02 00:00:00.000Z]
   end

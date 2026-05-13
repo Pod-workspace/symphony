@@ -547,7 +547,7 @@ defmodule SymphonyElixir.Orchestrator do
          terminal_states
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !issue_blocked_by_incomplete_dependencies?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
       available_slots(state) > 0 and
@@ -600,22 +600,37 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_routable_to_worker?(_issue), do: true
 
-  defp todo_issue_blocked_by_non_terminal?(
-         %Issue{state: issue_state, blocked_by: blockers},
+  defp issue_blocked_by_incomplete_dependencies?(
+         %Issue{id: issue_id, blocked_by: blocked_by, child_tasks: child_tasks},
          terminal_states
        )
-       when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
-
-        _ ->
-          true
-      end)
+       when is_list(blocked_by) and is_list(child_tasks) do
+    incomplete_dependency_refs?(blocked_by, terminal_states) or
+      incomplete_dependency_refs?(child_tasks, terminal_states, issue_id)
   end
 
-  defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+  defp issue_blocked_by_incomplete_dependencies?(_issue, _terminal_states), do: false
+
+  defp incomplete_dependency_refs?(refs, terminal_states, issue_id \\ nil) when is_list(refs) do
+    refs
+    |> reject_self_reference(issue_id)
+    |> Enum.any?(fn
+      %{state: dependency_state} when is_binary(dependency_state) ->
+        !terminal_issue_state?(dependency_state, terminal_states)
+
+      _ ->
+        true
+    end)
+  end
+
+  defp reject_self_reference(refs, issue_id) when is_binary(issue_id) do
+    Enum.reject(refs, fn
+      %{id: ^issue_id} -> true
+      _ -> false
+    end)
+  end
+
+  defp reject_self_reference(refs, _issue_id), do: refs
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -655,7 +670,9 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:skip, %Issue{} = refreshed_issue} ->
-        Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
+        Logger.info(
+          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)} child_tasks=#{length(refreshed_issue.child_tasks)}"
+        )
 
         state
 
@@ -1199,7 +1216,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !issue_blocked_by_incomplete_dependencies?(issue, terminal_states)
   end
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do

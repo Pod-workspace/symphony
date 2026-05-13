@@ -582,6 +582,72 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "issue with non-terminal child task is not dispatch-eligible" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "epic-1",
+      identifier: "MT-3001",
+      title: "Parent work",
+      state: "Todo",
+      child_tasks: [%{id: "child-1", identifier: "MT-3002", state: "In Progress"}]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "issue with terminal child tasks remains dispatch-eligible" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "epic-2",
+      identifier: "MT-3003",
+      title: "Parent work",
+      state: "Todo",
+      child_tasks: [
+        %{id: "child-2", identifier: "MT-3004", state: "Done"},
+        %{id: "child-3", identifier: "MT-3005", state: "Closed"}
+      ]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "issue child task gate ignores self references" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "epic-self",
+      identifier: "MT-3006",
+      title: "Parent work",
+      state: "Todo",
+      child_tasks: [
+        %{id: "epic-self", identifier: "MT-3006", state: "Todo"},
+        %{id: "child-4", identifier: "MT-3007", state: "Done"}
+      ]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",
@@ -606,6 +672,31 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert skipped_issue.identifier == "MT-1005"
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
+  end
+
+  test "dispatch revalidation skips stale issue once a non-terminal child task appears" do
+    stale_issue = %Issue{
+      id: "epic-stale",
+      identifier: "MT-3008",
+      title: "Stale parent work",
+      state: "Todo",
+      child_tasks: []
+    }
+
+    refreshed_issue = %Issue{
+      id: "epic-stale",
+      identifier: "MT-3008",
+      title: "Stale parent work",
+      state: "Todo",
+      child_tasks: [%{id: "child-5", identifier: "MT-3009", state: "Todo"}]
+    }
+
+    fetcher = fn ["epic-stale"] -> {:ok, [refreshed_issue]} end
+
+    assert {:skip, %Issue{} = skipped_issue} =
+             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+
+    assert skipped_issue.child_tasks == [%{id: "child-5", identifier: "MT-3009", state: "Todo"}]
   end
 
   test "dispatch revalidation unblocks todo issue when all blockers reach terminal state" do

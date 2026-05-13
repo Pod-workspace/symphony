@@ -49,9 +49,9 @@ defmodule SymphonyElixir.Notion.Client do
         with :ok <- validate_tracker_config(),
              {:ok, assignee_filter} <- routing_assignee_filter(),
              {:ok, issues} <- fetch_pages_by_ids(ids, assignee_filter, false) do
-          # Hydrate blockers so revalidation can check if Todo issues
-          # are still blocked or if their blockers have reached terminal state.
-          hydrate_blocker_metadata(issues)
+          # Hydrate dependency relations so revalidation can check whether
+          # blocked issues or parent tasks are ready to dispatch.
+          hydrate_dependency_metadata(issues)
         end
     end
   end
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.Notion.Client do
         |> Enum.reject(&is_nil/1)
 
       if hydrate_blockers? do
-        hydrate_blocker_metadata(issues)
+        hydrate_dependency_metadata(issues)
       else
         {:ok, issues}
       end
@@ -281,7 +281,7 @@ defmodule SymphonyElixir.Notion.Client do
             [page | acc]
 
           {:error, reason} ->
-            Logger.debug("Skipping blocker page #{page_id}: #{inspect(reason)}")
+            Logger.debug("Skipping related page #{page_id}: #{inspect(reason)}")
             acc
         end
       end)
@@ -290,43 +290,50 @@ defmodule SymphonyElixir.Notion.Client do
     build_issues_from_pages(pages, assignee_filter, include_markdown?, false)
   end
 
-  defp hydrate_blocker_metadata(issues) when is_list(issues) do
-    blocker_ids =
+  defp hydrate_dependency_metadata(issues) when is_list(issues) do
+    dependency_ids =
       issues
-      |> Enum.flat_map(fn %Issue{blocked_by: blocked_by} -> blocked_by end)
+      |> Enum.flat_map(fn %Issue{blocked_by: blocked_by, child_tasks: child_tasks} ->
+        blocked_by ++ child_tasks
+      end)
       |> Enum.map(& &1.id)
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
-    case fetch_pages_by_ids(blocker_ids, nil, false) do
-      {:ok, blocker_issues} ->
-        blocker_index =
-          Map.new(blocker_issues, fn %Issue{id: blocker_id, identifier: identifier, state: state} ->
-            {blocker_id, %{identifier: identifier, state: state}}
+    case fetch_pages_by_ids(dependency_ids, nil, false) do
+      {:ok, dependency_issues} ->
+        dependency_index =
+          Map.new(dependency_issues, fn %Issue{id: dependency_id, identifier: identifier, state: state} ->
+            {dependency_id, %{identifier: identifier, state: state}}
           end)
 
         {:ok,
-         Enum.map(issues, fn %Issue{blocked_by: blocked_by} = issue ->
-           hydrated_blockers =
-             Enum.map(blocked_by, fn blocker ->
-               blocker
-               |> Map.put(
-                 :identifier,
-                 get_in(blocker_index, [blocker.id, :identifier]) || blocker.identifier
-               )
-               |> Map.put(:state, get_in(blocker_index, [blocker.id, :state]) || blocker.state)
-             end)
-
-           %{issue | blocked_by: hydrated_blockers}
+         Enum.map(issues, fn %Issue{blocked_by: blocked_by, child_tasks: child_tasks} = issue ->
+           %{
+             issue
+             | blocked_by: hydrate_relation_refs(blocked_by, dependency_index),
+               child_tasks: hydrate_relation_refs(child_tasks, dependency_index)
+           }
          end)}
 
       {:error, _reason} ->
-        # Hydration failed; keep issues with unhydrated blockers.
-        # The orchestrator treats nil-state blockers as blocking (conservative).
-        Logger.warning("Blocker hydration failed; unhydrated blockers will be treated as blocking")
+        # Hydration failed; keep issues with unhydrated dependency refs.
+        # The orchestrator treats nil-state dependencies as blocking (conservative).
+        Logger.warning("Dependency hydration failed; unhydrated dependencies will be treated as blocking")
 
         {:ok, issues}
     end
+  end
+
+  defp hydrate_relation_refs(refs, dependency_index) when is_list(refs) and is_map(dependency_index) do
+    Enum.map(refs, fn ref ->
+      ref
+      |> Map.put(
+        :identifier,
+        get_in(dependency_index, [ref.id, :identifier]) || ref.identifier
+      )
+      |> Map.put(:state, get_in(dependency_index, [ref.id, :state]) || ref.state)
+    end)
   end
 
   defp maybe_fetch_descriptions(_pages, false), do: {:ok, %{}}
@@ -549,6 +556,7 @@ defmodule SymphonyElixir.Notion.Client do
       url: page["url"],
       assignee_id: first_assignee_id(assignees),
       blocked_by: relation_refs(Map.get(properties, notion_property_name("blocked_by"))),
+      child_tasks: relation_refs(Map.get(properties, notion_property_name("children"))),
       labels: labels_value(properties),
       assigned_to_worker: assigned_to_worker?(assignees, assignee_filter),
       created_at: parse_datetime(page["created_time"]),
