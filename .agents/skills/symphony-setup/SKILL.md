@@ -25,10 +25,10 @@ Report results to the user before proceeding.
 
 ## Build Symphony
 
-Use the [fork](https://github.com/odysseus0/symphony) — easier to get started with:
+Use the [fork](https://github.com/Pod-workspace/symphony) - easier to get started with:
 
 ```bash
-git clone https://github.com/odysseus0/symphony
+git clone https://github.com/Pod-workspace/symphony
 cd symphony/elixir
 mise trust && mise install
 mise exec -- mix setup
@@ -82,15 +82,10 @@ If detected, propose a `launch-app` skill based on what you find (framework, sta
 
 ### Install skills and workflow
 
-Install two things from Symphony into the user's repo:
+Copy two things from the Symphony checkout into the user's repo:
 
-1. **Skills** — install via skills.sh (agents need these in their workspace clone):
-   ```bash
-   cd <user's repo>
-   npx skills add odysseus0/symphony -a codex -s linear land commit push pull debug --copy -y
-   ```
-   The `--copy` flag is required — symlinks would break in workspace clones. The `-s` flag excludes `symphony-setup` (meta-skill, not needed by workers).
-2. **`elixir/WORKFLOW.md`** — copy the **entire file** including the markdown body. The prompt body contains the state machine, planning protocol, and validation strategy that makes agents effective.
+1. **Worker skills** — copy these directories into `<user's repo>/.agents/skills/`: `linear`, `notion`, `land`, `commit`, `push`, `pull`, and `debug`. Copy directories, not symlinks, because worker agents run in fresh workspace clones.
+2. **`elixir/WORKFLOW.md`** — copy the **entire file** to `<user's repo>/WORKFLOW.md`, including the markdown body. The prompt body contains the state machine, planning protocol, and validation strategy that makes agents effective.
 
 ## Patch WORKFLOW.md frontmatter
 
