@@ -21,8 +21,12 @@ defmodule SymphonyElixir.CLI do
   @spec main([String.t()]) :: no_return()
   def main(["mcp-server" | rest]) do
     case evaluate_mcp_server(rest) do
-      :ok -> System.halt(0)
-      {:error, message} -> IO.puts(:stderr, message); System.halt(1)
+      :ok ->
+        System.halt(0)
+
+      {:error, message} ->
+        IO.puts(:stderr, message)
+        System.halt(1)
     end
   end
 

@@ -136,6 +136,7 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.Agent.Adapter
     alias SymphonyElixir.Config.Schema
 
     @primary_key false
@@ -157,7 +158,7 @@ defmodule SymphonyElixir.Config.Schema do
         [:agent_adapter, :max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_concurrent_agents_by_state],
         empty_values: []
       )
-      |> validate_inclusion(:agent_adapter, SymphonyElixir.Agent.Adapter.supported_types())
+      |> validate_inclusion(:agent_adapter, Adapter.supported_types())
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)

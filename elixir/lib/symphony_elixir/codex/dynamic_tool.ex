@@ -47,7 +47,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       },
       "query" => %{
         "type" => ["object", "null"],
-        "description" => "Optional query string parameters.",
+        "description" => "Optional query string parameters. Values must be strings, numbers, booleans, null, or arrays of those scalar values for repeated query parameters.",
         "additionalProperties" => true
       },
       "body" => %{
@@ -425,6 +425,23 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "Notion API request failed with HTTP #{status}.",
         "status" => status,
         "body" => body
+      }
+    }
+  end
+
+  defp tool_error_payload({:notion_api_request, {:invalid_notion_query_param, key}}) do
+    %{
+      "error" => %{
+        "message" => "`notion_api.query` values must be strings, numbers, booleans, null, or arrays of those scalar values for repeated query parameters.",
+        "parameter" => to_string(key)
+      }
+    }
+  end
+
+  defp tool_error_payload({:notion_api_request, :invalid_notion_query}) do
+    %{
+      "error" => %{
+        "message" => "`notion_api.query` must be a JSON object or repeated query-param pair list when provided."
       }
     }
   end

@@ -111,7 +111,7 @@ defmodule SymphonyElixir.McpServer do
   end
 
   defp handle_message(%{"method" => method, "id" => id}) do
-    respond_error(id, -32601, "Method not found: #{method}")
+    respond_error(id, -32_601, "Method not found: #{method}")
   end
 
   # Notifications (no id) — ignore silently

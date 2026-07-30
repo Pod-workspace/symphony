@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         %{
           generated_at: generated_at,
+          started_at: iso8601(Map.get(snapshot, :started_at)),
           counts: %{
             running: length(snapshot.running),
             retrying: length(snapshot.retrying)

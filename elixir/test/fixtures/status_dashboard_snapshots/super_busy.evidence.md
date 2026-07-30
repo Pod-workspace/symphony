@@ -3,7 +3,7 @@
 │ Agents: 2/10
 │ Throughput: 1,842 tps
 │ Runtime: 72m 1s
-│ Tokens: in 250,000 | out 18,500 | total 268,500
+│ Tokens: in 250,000 | out 18,500 | total 268,500 since 2026-07-03 13:28:26 UTC
 │ Agent: codex
 │ Account: agent@example.com | ChatGPT | Pro
 │ Rate Limits: gpt-5 | primary 12,345/20,000 reset 30s | secondary 45/60 reset 12s | credits 9876.50

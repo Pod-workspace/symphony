@@ -1109,6 +1109,45 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner returns hook failures instead of raising" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-hook-failure-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+      System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
+      System.cmd("git", ["-C", template_repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", template_repo, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", template_repo, "add", "README.md"])
+      System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "exit 7",
+        codex_command: "/bin/false app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-hook-failure",
+        identifier: "MT-100",
+        title: "Hook failure",
+        description: "Fail after_create",
+        state: "In Progress"
+      }
+
+      assert {:error, {:workspace_hook_failed, "after_create", 7, _output}} = AgentRunner.run(issue)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "agent runner forwards timestamped codex updates to recipient" do
     test_root =
       Path.join(

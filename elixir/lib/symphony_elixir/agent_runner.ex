@@ -12,7 +12,7 @@ defmodule SymphonyElixir.AgentRunner do
   @max_consecutive_empty_turns 3
   @empty_turn_backoff_base_ms 2_000
 
-  @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
+  @spec run(map(), pid() | nil, keyword()) :: :ok | {:error, term()}
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
     Logger.info("Starting agent run for #{issue_context(issue)}")
 
@@ -25,7 +25,7 @@ defmodule SymphonyElixir.AgentRunner do
           else
             {:error, reason} ->
               Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
-              raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+              {:error, reason}
           end
         after
           Workspace.run_after_run_hook(workspace, issue)
@@ -33,7 +33,7 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
-        raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+        {:error, reason}
     end
   end
 

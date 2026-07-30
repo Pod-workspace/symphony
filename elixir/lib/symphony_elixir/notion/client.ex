@@ -65,8 +65,8 @@ defmodule SymphonyElixir.Notion.Client do
 
     with {:ok, method} <- normalize_method(method),
          {:ok, headers} <- request_headers(),
-         request_opts <- build_request_options(method, path, headers, query, body),
-         {:ok, %{status: status, body: response_body} = response} <- request_fun.(request_opts) do
+         {:ok, request_opts} <- build_request_options(method, path, headers, query, body),
+         {:ok, %{status: status, body: response_body} = response} <- safe_request(request_fun, request_opts) do
       if status in 200..299 do
         {:ok, response_body}
       else
@@ -481,21 +481,32 @@ defmodule SymphonyElixir.Notion.Client do
     end
   end
 
+  defp safe_request(request_fun, request_opts) do
+    request_fun.(request_opts)
+  rescue
+    error -> {:error, error}
+  end
+
   defp build_request_options(method, path, headers, query, body) do
-    [
-      method: method,
-      url: notion_url(path),
-      headers: headers,
-      decode_json: [],
-      params: normalize_optional_map(query),
-      json: normalize_optional_map(body),
-      connect_options: [timeout: 30_000],
-      receive_timeout: 30_000
-    ]
-    |> Enum.reject(fn
-      {_key, nil} -> true
-      _ -> false
-    end)
+    with {:ok, params} <- normalize_query_params(query) do
+      opts =
+        [
+          method: method,
+          url: notion_url(path),
+          headers: headers,
+          decode_json: [],
+          params: params,
+          json: normalize_optional_map(body),
+          connect_options: [timeout: 30_000],
+          receive_timeout: 30_000
+        ]
+        |> Enum.reject(fn
+          {_key, nil} -> true
+          _ -> false
+        end)
+
+      {:ok, opts}
+    end
   end
 
   defp notion_url(path) do
@@ -757,21 +768,27 @@ defmodule SymphonyElixir.Notion.Client do
   defp build_state_filter(_data_source, []), do: nil
 
   defp build_state_filter(data_source, notion_states) do
-    with {:ok, property_name, property_type} <- state_property_details(data_source) do
-      conditions =
-        Enum.map(notion_states, fn notion_state ->
-          %{
-            "property" => property_name,
-            property_type => %{"equals" => notion_state}
-          }
-        end)
+    case state_property_details(data_source) do
+      {:ok, property_name, property_type} ->
+        build_state_filter_conditions(property_name, property_type, notion_states)
 
-      case conditions do
-        [single] -> single
-        many -> %{"or" => many}
-      end
-    else
-      _ -> nil
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp build_state_filter_conditions(property_name, property_type, notion_states) do
+    conditions =
+      Enum.map(notion_states, fn notion_state ->
+        %{
+          "property" => property_name,
+          property_type => %{"equals" => notion_state}
+        }
+      end)
+
+    case conditions do
+      [single] -> single
+      many -> %{"or" => many}
     end
   end
 
@@ -1034,4 +1051,75 @@ defmodule SymphonyElixir.Notion.Client do
   defp normalize_optional_map(nil), do: nil
   defp normalize_optional_map(value) when is_map(value), do: value
   defp normalize_optional_map(value) when is_list(value), do: value
+
+  defp normalize_query_params(nil), do: {:ok, nil}
+
+  defp normalize_query_params(%{} = params) do
+    params
+    |> Enum.reduce_while({:ok, []}, fn {key, value}, {:ok, acc} ->
+      case query_param_pairs(key, value) do
+        {:ok, pairs} -> {:cont, {:ok, acc ++ pairs}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, []} -> {:ok, nil}
+      {:ok, pairs} -> {:ok, pairs}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_query_params(params) when is_list(params) do
+    params
+    |> Enum.reduce_while({:ok, []}, fn
+      {key, value}, {:ok, acc} ->
+        case query_param_pairs(key, value) do
+          {:ok, pairs} -> {:cont, {:ok, acc ++ pairs}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+
+      _other, _acc ->
+        {:halt, {:error, :invalid_notion_query}}
+    end)
+    |> case do
+      {:ok, []} -> {:ok, nil}
+      {:ok, pairs} -> {:ok, pairs}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_query_params(_params), do: {:error, :invalid_notion_query}
+
+  defp query_param_pairs(_key, nil), do: {:ok, []}
+
+  defp query_param_pairs(key, values) when is_list(values) do
+    values
+    |> Enum.reduce_while({:ok, []}, fn
+      nil, {:ok, acc} ->
+        {:cont, {:ok, acc}}
+
+      value, {:ok, acc} ->
+        if query_param_scalar?(value) do
+          {:cont, {:ok, acc ++ [{key, value}]}}
+        else
+          {:halt, {:error, {:invalid_notion_query_param, key}}}
+        end
+    end)
+  end
+
+  defp query_param_pairs(key, value) when is_binary(key) or is_atom(key) do
+    if query_param_scalar?(value) do
+      {:ok, [{key, value}]}
+    else
+      {:error, {:invalid_notion_query_param, key}}
+    end
+  end
+
+  defp query_param_pairs(key, _value), do: {:error, {:invalid_notion_query_param, key}}
+
+  defp query_param_scalar?(value)
+       when is_binary(value) or is_number(value) or is_boolean(value),
+       do: true
+
+  defp query_param_scalar?(_value), do: false
 end

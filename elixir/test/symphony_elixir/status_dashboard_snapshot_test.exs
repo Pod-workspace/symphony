@@ -4,11 +4,13 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
   alias SymphonyElixir.TestSupport.Snapshot
 
   @terminal_columns 115
+  @runner_started_at ~U[2026-07-03 13:28:26Z]
 
   test "snapshot fixture: idle dashboard" do
     snapshot_data =
       {:ok,
        %{
+         started_at: @runner_started_at,
          running: [],
          retrying: [],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
@@ -35,6 +37,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     snapshot_data =
       {:ok,
        %{
+         started_at: @runner_started_at,
          running: [],
          retrying: [],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
@@ -49,6 +52,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     snapshot_data =
       {:ok,
        %{
+         started_at: @runner_started_at,
          running: [
            running_entry(%{
              identifier: "MT-101",
@@ -92,6 +96,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     snapshot_data =
       {:ok,
        %{
+         started_at: @runner_started_at,
          running: [
            running_entry(%{
              identifier: "MT-638",
@@ -175,6 +180,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     snapshot_data =
       {:ok,
        %{
+         started_at: @runner_started_at,
          running: [
            running_entry(%{
              identifier: "MT-777",

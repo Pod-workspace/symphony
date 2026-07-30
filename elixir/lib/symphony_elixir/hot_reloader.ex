@@ -11,6 +11,8 @@ defmodule SymphonyElixir.HotReloader do
   use GenServer
   require Logger
 
+  alias SymphonyElixir.{Config, HttpServer}
+
   @default_poll_interval_ms 1_000
   @reloadable_patterns ["lib/**/*.ex", "lib/**/*.exs"]
   @cold_restart_patterns ["config/**/*.exs", "mix.exs", "mix.lock"]
@@ -18,7 +20,7 @@ defmodule SymphonyElixir.HotReloader do
   defmodule State do
     @moduledoc false
 
-    defstruct [:root, :poll_interval_ms, :reload_fun, :snapshot]
+    defstruct [:root, :poll_interval_ms, :reload_fun, :after_reload_fun, :snapshot]
   end
 
   @type category :: :reloadable | :cold_restart
@@ -42,12 +44,21 @@ defmodule SymphonyElixir.HotReloader do
     root = Path.expand(Keyword.get(opts, :root, File.cwd!()))
     poll_interval_ms = normalize_poll_interval_ms(Keyword.get(opts, :poll_interval_ms))
     reload_fun = Keyword.get(opts, :reload_fun, &default_reload/1)
+    after_reload_fun = Keyword.get(opts, :after_reload_fun, &ensure_observability_server/0)
     snapshot = snapshot(root)
 
     Logger.info("Hot reloader watching #{root} every #{poll_interval_ms}ms for reloadable source changes")
 
     schedule_poll(poll_interval_ms)
-    {:ok, %State{root: root, poll_interval_ms: poll_interval_ms, reload_fun: reload_fun, snapshot: snapshot}}
+
+    {:ok,
+     %State{
+       root: root,
+       poll_interval_ms: poll_interval_ms,
+       reload_fun: reload_fun,
+       after_reload_fun: after_reload_fun,
+       snapshot: snapshot
+     }}
   end
 
   @impl true
@@ -61,21 +72,23 @@ defmodule SymphonyElixir.HotReloader do
     {:noreply, run_poll(state)}
   end
 
-  defp run_poll(%State{root: root, reload_fun: reload_fun, snapshot: previous_snapshot} = state) do
+  defp run_poll(%{__struct__: State, root: root, reload_fun: reload_fun, snapshot: previous_snapshot} = state) do
+    after_reload_fun = Map.get(state, :after_reload_fun, &ensure_observability_server/0)
     current_snapshot = snapshot(root)
 
     %{reloadable: reloadable_paths, cold_restart: cold_restart_paths} =
       classify_changes(previous_snapshot, current_snapshot)
 
-    maybe_reload(reloadable_paths, reload_fun)
+    maybe_reload(reloadable_paths, reload_fun, after_reload_fun)
     maybe_warn_cold_restart(cold_restart_paths)
 
     %{state | snapshot: current_snapshot}
   end
 
-  defp maybe_reload([], _reload_fun), do: :ok
+  defp maybe_reload([], _reload_fun, _after_reload_fun), do: :ok
 
-  defp maybe_reload(paths, reload_fun) when is_function(reload_fun, 1) do
+  defp maybe_reload(paths, reload_fun, after_reload_fun)
+       when is_function(reload_fun, 1) and is_function(after_reload_fun, 0) do
     Logger.info("Hot reloader recompiling #{length(paths)} changed file(s): #{Enum.join(paths, ", ")}")
 
     try do
@@ -88,6 +101,7 @@ defmodule SymphonyElixir.HotReloader do
 
         _other ->
           Logger.info("Hot reloader applied updated code without restarting the node")
+          run_after_reload(after_reload_fun)
       end
     rescue
       exception ->
@@ -106,6 +120,70 @@ defmodule SymphonyElixir.HotReloader do
 
   defp default_reload(_paths) do
     IEx.Helpers.recompile()
+  end
+
+  defp run_after_reload(after_reload_fun) do
+    case after_reload_fun.() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Hot reloader post-reload health check failed: #{inspect(reason)}")
+
+      other ->
+        Logger.warning("Hot reloader post-reload health check returned unexpected value: #{inspect(other)}")
+    end
+  rescue
+    exception ->
+      Logger.warning("Hot reloader post-reload health check crashed: #{Exception.message(exception)}")
+  catch
+    kind, reason ->
+      Logger.warning("Hot reloader post-reload health check crashed: #{kind}: #{inspect(reason)}")
+  end
+
+  defp ensure_observability_server do
+    cond do
+      is_nil(Config.server_port()) ->
+        :ok
+
+      is_integer(HttpServer.bound_port()) ->
+        :ok
+
+      true ->
+        restart_observability_child()
+    end
+  end
+
+  defp restart_observability_child do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      nil ->
+        {:error, :supervisor_unavailable}
+
+      _pid ->
+        with :ok <- terminate_observability_child(),
+             {:ok, _pid} <- Supervisor.restart_child(SymphonyElixir.Supervisor, HttpServer) do
+          Logger.info("Hot reloader restarted observability HTTP server after reload")
+          :ok
+        else
+          {:ok, _pid, _info} ->
+            Logger.info("Hot reloader restarted observability HTTP server after reload")
+            :ok
+
+          {:error, {:already_started, _pid}} ->
+            :ok
+
+          {:error, reason} ->
+            {:error, {:restart_observability_child_failed, reason}}
+        end
+    end
+  end
+
+  defp terminate_observability_child do
+    case Supervisor.terminate_child(SymphonyElixir.Supervisor, HttpServer) do
+      :ok -> :ok
+      {:error, :not_started} -> :ok
+      {:error, reason} -> {:error, {:terminate_observability_child_failed, reason}}
+    end
   end
 
   defp schedule_poll(poll_interval_ms) do

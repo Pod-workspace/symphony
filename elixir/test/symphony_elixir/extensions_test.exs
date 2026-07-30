@@ -423,6 +423,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
+             "started_at" => state_payload["started_at"],
              "counts" => %{"running" => 1, "retrying" => 1},
              "running" => [
                %{

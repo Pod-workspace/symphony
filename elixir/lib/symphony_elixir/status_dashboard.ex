@@ -314,6 +314,7 @@ defmodule SymphonyElixir.StatusDashboard do
         {
           {:ok,
            %{
+             started_at: Map.get(snapshot, :started_at),
              running: running,
              retrying: retrying,
              codex_totals: codex_totals,
@@ -343,6 +344,7 @@ defmodule SymphonyElixir.StatusDashboard do
         codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
         codex_total_tokens = Map.get(codex_totals, :total_tokens, 0)
         codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
+        runner_started_at = Map.get(snapshot, :started_at)
         agent_count = length(running)
         max_agents = Config.settings!().agent.max_concurrent_agents
         running_event_width = running_event_width(terminal_columns_override)
@@ -364,7 +366,9 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize(" | ", @ansi_gray) <>
              colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow) <>
              colorize(" | ", @ansi_gray) <>
-             colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
+             colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow) <>
+             colorize(" since ", @ansi_gray) <>
+             colorize(format_started_at(runner_started_at), @ansi_cyan),
            colorize("│ Agent: ", @ansi_bold) <> colorize(agent_runtime_label(), @ansi_cyan),
            colorize("│ Account: ", @ansi_bold) <> format_account_summary(account),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
@@ -582,6 +586,7 @@ defmodule SymphonyElixir.StatusDashboard do
         when is_list(running) and is_list(retrying) ->
           {:ok,
            %{
+             started_at: Map.get(snapshot, :started_at),
              running: running,
              retrying: retrying,
              codex_totals: codex_totals,
@@ -734,6 +739,23 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_runtime_seconds(seconds) when is_binary(seconds), do: seconds
   defp format_runtime_seconds(_), do: "0m 0s"
+
+  defp format_started_at(%DateTime{} = started_at) do
+    started_at
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+    |> String.replace("T", " ")
+    |> String.replace("Z", " UTC")
+  end
+
+  defp format_started_at(started_at) when is_binary(started_at) do
+    case DateTime.from_iso8601(started_at) do
+      {:ok, parsed, _offset} -> format_started_at(parsed)
+      _ -> "n/a"
+    end
+  end
+
+  defp format_started_at(_started_at), do: "n/a"
 
   defp format_runtime_and_turns(seconds, turn_count) when is_integer(turn_count) and turn_count > 0 do
     "#{format_runtime_seconds(seconds)} / #{turn_count}"
@@ -1302,12 +1324,18 @@ defmodule SymphonyElixir.StatusDashboard do
   defp humanize_claude_event(%{"type" => "assistant", "message" => %{"content" => content}})
        when is_list(content) do
     Enum.find_value(content, fn
-      %{"type" => "tool_use", "name" => name} -> "using tool: #{name}"
+      %{"type" => "tool_use", "name" => name} ->
+        "using tool: #{name}"
+
       %{"type" => "text", "text" => text} when is_binary(text) ->
         trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, 120)
         if trimmed != "", do: "writing: #{trimmed}"
-      %{"type" => "thinking"} -> "thinking..."
-      _ -> nil
+
+      %{"type" => "thinking"} ->
+        "thinking..."
+
+      _ ->
+        nil
     end) || "assistant responding..."
   end
 

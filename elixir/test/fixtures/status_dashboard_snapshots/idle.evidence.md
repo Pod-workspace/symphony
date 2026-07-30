@@ -3,7 +3,7 @@
 │ Agents: 0/10
 │ Throughput: 0 tps
 │ Runtime: 0m 0s
-│ Tokens: in 0 | out 0 | total 0
+│ Tokens: in 0 | out 0 | total 0 since 2026-07-03 13:28:26 UTC
 │ Agent: codex
 │ Account: agent@example.com | ChatGPT | Pro
 │ Rate Limits: unavailable

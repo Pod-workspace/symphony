@@ -103,6 +103,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="metric-detail numeric">
               In <%= format_int(@payload.codex_totals.input_tokens) %> / Out <%= format_int(@payload.codex_totals.output_tokens) %>
             </p>
+            <p class="metric-detail">
+              Since <%= format_started_at(@payload.started_at) %>
+            </p>
           </article>
 
           <article class="metric-card">
@@ -284,6 +287,23 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp format_runtime_and_turns(started_at, _turn_count, now),
     do: format_runtime_seconds(runtime_seconds_from_started_at(started_at, now))
+
+  defp format_started_at(started_at) when is_binary(started_at) do
+    case DateTime.from_iso8601(started_at) do
+      {:ok, parsed, _offset} -> format_started_at(parsed)
+      _ -> "n/a"
+    end
+  end
+
+  defp format_started_at(%DateTime{} = started_at) do
+    started_at
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+    |> String.replace("T", " ")
+    |> String.replace("Z", " UTC")
+  end
+
+  defp format_started_at(_started_at), do: "n/a"
 
   defp format_runtime_seconds(seconds) when is_number(seconds) do
     whole_seconds = max(trunc(seconds), 0)

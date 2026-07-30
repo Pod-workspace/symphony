@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Orchestrator do
       :poll_check_in_progress,
       :tick_timer_ref,
       :tick_token,
+      :started_at,
       running: %{},
       completed: MapSet.new(),
       claimed: MapSet.new(),
@@ -51,11 +52,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!()
 
     state = %State{
+      started_at: DateTime.utc_now(),
       poll_interval_ms: config.polling.interval_ms,
       max_concurrent_agents: config.agent.max_concurrent_agents,
       next_poll_due_at_ms: now_ms,
@@ -66,10 +68,15 @@ defmodule SymphonyElixir.Orchestrator do
       codex_rate_limits: nil
     }
 
-    run_terminal_workspace_cleanup()
-    state = schedule_tick(state, 0)
+    state = maybe_schedule_startup_tick(state, opts)
 
-    {:ok, state}
+    {:ok, state, {:continue, :run_terminal_workspace_cleanup}}
+  end
+
+  @impl true
+  def handle_continue(:run_terminal_workspace_cleanup, state) do
+    Task.start(fn -> run_terminal_workspace_cleanup() end)
+    {:noreply, state}
   end
 
   @impl true
@@ -686,7 +693,10 @@ defmodule SymphonyElixir.Orchestrator do
     recipient = self()
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt)
+           case AgentRunner.run(issue, recipient, attempt: attempt) do
+             :ok -> :ok
+             {:error, reason} -> exit({:agent_run_failed, reason})
+           end
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -912,6 +922,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp maybe_schedule_startup_tick(%State{} = state, opts) do
+    if Keyword.get(opts, :startup_poll?, true) do
+      schedule_tick(state, 0)
+    else
+      state
+    end
+  end
+
   defp release_issue_claim(%State{} = state, issue_id) do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
@@ -1053,6 +1071,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     {:reply,
      %{
+       started_at: state.started_at,
        running: running,
        retrying: retrying,
        codex_totals: state.codex_totals,

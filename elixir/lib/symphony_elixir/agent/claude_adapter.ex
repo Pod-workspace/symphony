@@ -42,9 +42,7 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
         {:ok, Map.put(result, :session_id, session_id)}
 
       {:error, reason} ->
-        Logger.warning(
-          "Claude session ended with error for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}"
-        )
+        Logger.warning("Claude session ended with error for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}")
 
         emit_message(on_message, :turn_ended_with_error, %{session_id: session_id, reason: reason})
         {:error, reason}
@@ -64,9 +62,7 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
       command = build_command(claude_config, prompt_file, mcp_config_file)
       env = build_env(claude_config)
 
-      Logger.info(
-        "Starting Claude session for #{issue_context(issue)} session_id=#{session_id} workspace=#{workspace}"
-      )
+      Logger.info("Starting Claude session for #{issue_context(issue)} session_id=#{session_id} workspace=#{workspace}")
 
       emit_message(on_message, :session_started, %{session_id: session_id})
 
@@ -96,9 +92,7 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
               {:ok, result_data}
 
             {:error, reason} = error ->
-              Logger.error(
-                "Claude session failed for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}"
-              )
+              Logger.error("Claude session failed for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}")
 
               safe_close_port(port)
               error
@@ -120,7 +114,8 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
     parts = [
       base,
       "--print",
-      "--output-format", "stream-json",
+      "--output-format",
+      "stream-json",
       "--verbose"
     ]
 
@@ -333,9 +328,7 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
   end
 
   defp handle_system_event(%{"subtype" => "api_retry"} = payload, on_message, session_id) do
-    Logger.warning(
-      "Claude API retry: attempt=#{payload["attempt"]} error=#{payload["error"]} session_id=#{session_id}"
-    )
+    Logger.warning("Claude API retry: attempt=#{payload["attempt"]} error=#{payload["error"]} session_id=#{session_id}")
 
     emit_message(on_message, :notification, %{
       payload: payload,
@@ -358,12 +351,18 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
 
   defp summarize_assistant_content(content) when is_list(content) do
     Enum.find_value(content, fn
-      %{"type" => "tool_use", "name" => name} -> "using tool: #{name}"
+      %{"type" => "tool_use", "name" => name} ->
+        "using tool: #{name}"
+
       %{"type" => "text", "text" => text} when is_binary(text) ->
         trimmed = text |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, 120)
         if trimmed != "", do: "writing: #{trimmed}"
-      %{"type" => "thinking"} -> "thinking..."
-      _ -> nil
+
+      %{"type" => "thinking"} ->
+        "thinking..."
+
+      _ ->
+        nil
     end)
   end
 
@@ -516,7 +515,9 @@ defmodule SymphonyElixir.Agent.ClaudeAdapter do
 
   defp safe_close_port(port) when is_port(port) do
     case :erlang.port_info(port) do
-      :undefined -> :ok
+      :undefined ->
+        :ok
+
       _ ->
         try do
           Port.close(port)

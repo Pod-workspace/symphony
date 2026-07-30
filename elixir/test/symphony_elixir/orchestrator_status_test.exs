@@ -845,7 +845,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator snapshot includes poll countdown and checking status" do
     orchestrator_name = Module.concat(__MODULE__, :PollingSnapshotOrchestrator)
-    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name, startup_poll?: false)
 
     on_exit(fn ->
       if Process.alive?(pid) do
@@ -1407,6 +1407,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         codex_app_server_pid: "4242",
         codex_total_tokens: 12,
         runtime_seconds: 15,
+        started_at: ~U[2026-07-30 12:34:56Z],
         last_codex_event: :notification,
         last_codex_message: %{
           event: :notification,
@@ -1419,6 +1420,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     plain = Regex.replace(~r/\e\[[\\d;]*m/, row, "")
 
+    refute plain =~ "2026-07-30 12:34"
     assert plain =~ "turn completed (completed)"
     assert (String.split(plain, "turn completed (completed)") |> length()) - 1 == 1
     refute plain =~ " notification "

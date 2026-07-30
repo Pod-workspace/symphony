@@ -86,6 +86,69 @@ defmodule SymphonyElixir.NotionClientTest do
     assert opts[:json] == %{"page_size" => 1}
   end
 
+  test "request expands list-valued query params for repeated notion filters" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_api_token: "notion-token",
+      tracker_data_source_id: "data-source"
+    )
+
+    test_pid = self()
+
+    assert {:ok, %{}} =
+             Client.request("POST", "/data_sources/data-source/query",
+               query: %{
+                 "filter_properties[]" => ["Symphony Status", "Skip Human Review"],
+                 "page_size" => 1
+               },
+               request_fun: fn opts ->
+                 send(test_pid, {:request_opts, opts})
+                 {:ok, %{status: 200, body: %{}}}
+               end
+             )
+
+    assert_received {:request_opts, opts}
+
+    assert opts[:params] == [
+             {"filter_properties[]", "Symphony Status"},
+             {"filter_properties[]", "Skip Human Review"},
+             {"page_size", 1}
+           ]
+  end
+
+  test "request rejects nested query values before req encodes params" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_api_token: "notion-token",
+      tracker_data_source_id: "data-source"
+    )
+
+    assert {:error, {:notion_api_request, {:invalid_notion_query_param, "filter_properties[]"}}} =
+             Client.request("POST", "/data_sources/data-source/query",
+               query: %{"filter_properties[]" => [["Symphony Status"]]},
+               request_fun: fn _opts ->
+                 flunk("request should not be executed when query params are invalid")
+               end
+             )
+  end
+
+  test "request converts request encoder exceptions into errors" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_api_token: "notion-token",
+      tracker_data_source_id: "data-source"
+    )
+
+    assert {:error, {:notion_api_request, %ArgumentError{message: "bad query"}}} =
+             Client.request("GET", "/pages/page-1", request_fun: fn _opts -> raise ArgumentError, "bad query" end)
+  end
+
   test "normalize_page applies notion property mappings and strips managed workpad content" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "notion",

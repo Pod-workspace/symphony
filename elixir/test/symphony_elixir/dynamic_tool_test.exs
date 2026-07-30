@@ -26,6 +26,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert notion_spec != nil
     assert notion_spec["description"] =~ "Notion"
     assert notion_spec["inputSchema"]["required"] == ["method", "path"]
+    assert notion_spec["inputSchema"]["properties"]["query"]["description"] =~ "arrays of those scalar values"
     assert sync_spec != nil
   end
 
@@ -412,6 +413,36 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert [%{"text" => text}] = response["contentItems"]
     assert Jason.decode!(text) == %{"object" => "page", "id" => "page-1"}
+  end
+
+  test "notion_api reports invalid nested query params without crashing" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "notion",
+      tracker_endpoint: nil,
+      tracker_project_slug: nil,
+      tracker_api_token: "notion-token",
+      tracker_data_source_id: "data-source"
+    )
+
+    response =
+      DynamicTool.execute(
+        "notion_api",
+        %{
+          "method" => "GET",
+          "path" => "/pages/page-1",
+          "query" => %{"filter_properties[]" => [["Name"]]}
+        }
+      )
+
+    assert response["success"] == false
+    assert [%{"text" => text}] = response["contentItems"]
+
+    assert Jason.decode!(text) == %{
+             "error" => %{
+               "message" => "`notion_api.query` values must be strings, numbers, booleans, null, or arrays of those scalar values for repeated query parameters.",
+               "parameter" => "filter_properties[]"
+             }
+           }
   end
 
   test "notion_api omits absent query and body maps" do
